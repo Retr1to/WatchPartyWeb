@@ -31,6 +31,20 @@ export class RoomComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.roomCode = this.route.snapshot.paramMap.get('code') || '';
     console.log('RoomComponent initialized with code:', this.roomCode);
+    
+    // Obtener datos de la sala desde el estado del router
+    const navigation = this.router.getCurrentNavigation();
+    const state = navigation?.extras?.state || history.state;
+    
+    if (state && state['room']) {
+      console.log('Room data received from router state:', state['room']);
+      this.room = state['room'];
+      if (this.room) {
+        this.videoUrl = this.room.videoState.url;
+        this.findCurrentUser();
+      }
+    }
+    
     this.setupSocketListeners();
   }
 

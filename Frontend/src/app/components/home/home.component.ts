@@ -22,12 +22,12 @@ export class HomeComponent {
     private router: Router
   ) {
     // Navegar cuando se crea o se une a una sala
-    this.socketService.onRoomCreated().subscribe(({ roomCode }) => {
-      this.router.navigate(['/room', roomCode]);
+    this.socketService.onRoomCreated().subscribe(({ roomCode, room }) => {
+      this.router.navigate(['/room', roomCode], { state: { room } });
     });
 
-    this.socketService.onRoomJoined().subscribe(() => {
-      this.router.navigate(['/room', this.roomCode.toUpperCase()]);
+    this.socketService.onRoomJoined().subscribe(({ room }) => {
+      this.router.navigate(['/room', this.roomCode.toUpperCase()], { state: { room } });
     });
 
     this.socketService.onRoomError().subscribe(({ message }) => {
