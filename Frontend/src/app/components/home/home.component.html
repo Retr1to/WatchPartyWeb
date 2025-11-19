@@ -1,0 +1,60 @@
+<div class="home-container">
+  <div class="card">
+    <div class="icon">
+      <svg width="80" height="80" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="2" y="6" width="20" height="12" rx="2" fill="white" stroke="white" stroke-width="2"/>
+        <circle cx="17" cy="12" r="2" fill="#667eea"/>
+        <path d="M2 6L2 18" stroke="#667eea" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    </div>
+
+    <h1>WatchTogether</h1>
+    <p class="subtitle">Ve videos con tus amigos en tiempo real</p>
+
+    <div class="username-input">
+      <input 
+        type="text" 
+        [(ngModel)]="username" 
+        placeholder="Tu nombre (opcional)"
+        maxlength="20"
+      />
+    </div>
+
+    <button class="btn btn-primary" (click)="createNewRoom()">
+      <span class="star">✨</span> Crear Sala Nueva
+    </button>
+
+    <div class="divider">
+      <span>o</span>
+    </div>
+
+    <button class="btn btn-secondary" (click)="showJoinRoomDialog()">
+      Unirse a Sala
+    </button>
+
+    <div class="error-message" *ngIf="errorMessage">
+      {{ errorMessage }}
+    </div>
+  </div>
+
+  <!-- Join Room Dialog -->
+  <div class="modal" *ngIf="showJoinDialog" (click)="closeDialog()">
+    <div class="modal-content" (click)="$event.stopPropagation()">
+      <h2>Unirse a Sala</h2>
+      <input 
+        type="text" 
+        [(ngModel)]="roomCode" 
+        placeholder="Código de sala (ej: ADDHR)"
+        maxlength="6"
+        (input)="roomCode = roomCode.toUpperCase()"
+      />
+      <div class="modal-buttons">
+        <button class="btn btn-secondary" (click)="closeDialog()">Cancelar</button>
+        <button class="btn btn-primary" (click)="joinRoom()">Unirse</button>
+      </div>
+      <div class="error-message" *ngIf="errorMessage">
+        {{ errorMessage }}
+      </div>
+    </div>
+  </div>
+</div>
