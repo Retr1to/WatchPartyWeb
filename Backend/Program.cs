@@ -71,14 +71,14 @@ async Task HandleWebSocketAsync(WebSocket webSocket, string roomId, ConcurrentBa
     connections.TryTake(out _); // Remove from connections
 }
 
-// Video upload endpoint (admin only)
+// Video upload endpoint (host only)
 app.MapPost("/upload/{roomId}", async (HttpContext context, string roomId) =>
 {
-    // Simple admin check: require header "X-Admin-Key" with value "admin123" (change in production)
-    if (!context.Request.Headers.TryGetValue("X-Admin-Key", out var adminKey) || adminKey != "admin123")
+    // Check if user is host: require header "X-Is-Host" with value "true"
+    if (!context.Request.Headers.TryGetValue("X-Is-Host", out var isHost) || isHost != "true")
     {
         context.Response.StatusCode = 403;
-        await context.Response.WriteAsync("Forbidden: Admin access required");
+        await context.Response.WriteAsync("Forbidden: Host access required");
         return;
     }
 
