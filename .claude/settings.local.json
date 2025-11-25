@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(tree:*)",
+      "Bash(test:*)",
+      "Bash(npm install:*)",
+      "Bash(dotnet run:*)",
+      "Bash(npm start)",
+      "Bash(npx ng serve:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

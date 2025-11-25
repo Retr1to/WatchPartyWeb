@@ -3,11 +3,12 @@ import { Router } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SocketService } from '../../services/socket.service';
+import { AnimatedWaveIconComponent } from '../animated-wave-icon/animated-wave-icon.component';
 
 @Component({
   selector: 'app-home',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, AnimatedWaveIconComponent],
   templateUrl: './home.component.html',
   styleUrls: ['./home.component.css']
 })

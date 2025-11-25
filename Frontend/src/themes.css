@@ -1,0 +1,373 @@
+/**
+ * WatchParty - Sistema de Temas
+ * ================================
+ *
+ * Este archivo contiene 5 paletas de colores completas para la aplicación.
+ * Cada tema está diseñado para diferentes moods y casos de uso.
+ *
+ * Temas disponibles:
+ * 1. Atardecer Tropical (por defecto) - Acogedor y versátil
+ * 2. Nostalgia Neón - Energético y futurista
+ * 3. Aurora Boreal - Sereno y mágico
+ * 4. Blurple Elegante - Moderno y confiable
+ * 5. Noche Dorada - Elegante y exclusivo
+ *
+ * Uso:
+ * - Agregar data-theme="nombre-tema" al <body> o elemento raíz
+ * - Cambiar dinámicamente con JavaScript/TypeScript
+ */
+
+/* ================================================================
+   TEMA POR DEFECTO: ATARDECER TROPICAL 🌅
+   Mood: Acogedor y social
+   Mejor para: Uso general, eventos comunitarios
+   ================================================================ */
+
+:root,
+[data-theme="tropical-sunset"] {
+  /* === BACKGROUND === */
+  --bg-gradient-start: #1F214D;
+  --bg-gradient-end: #3B0D14;
+  --bg-gradient: linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+
+  /* === PRIMARY ACCENT === */
+  --primary-start: #EC4899;
+  --primary-end: #F97316;
+  --primary-gradient: linear-gradient(135deg, var(--primary-start) 0%, var(--primary-end) 100%);
+  --primary-solid: #EC4899;
+
+  /* === SECONDARY ACCENT === */
+  --secondary-accent: #A78BFA;
+  --secondary-gradient: linear-gradient(135deg, #A78BFA 0%, #EC4899 100%);
+
+  /* === STATUS COLORS === */
+  --color-success: #22C55E;
+  --color-success-bg: rgba(34, 197, 94, 0.1);
+  --color-success-border: rgba(34, 197, 94, 0.3);
+
+  --color-warning: #F59E0B;
+  --color-warning-bg: rgba(245, 158, 11, 0.1);
+  --color-warning-border: rgba(245, 158, 11, 0.3);
+
+  --color-error: #EF4444;
+  --color-error-bg: rgba(239, 68, 68, 0.1);
+  --color-error-border: rgba(239, 68, 68, 0.3);
+
+  --color-info: #3B82F6;
+  --color-info-bg: rgba(59, 130, 246, 0.1);
+  --color-info-border: rgba(59, 130, 246, 0.3);
+
+  /* === TEXT === */
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(255, 255, 255, 0.8);
+  --text-tertiary: rgba(255, 255, 255, 0.6);
+  --text-disabled: rgba(255, 255, 255, 0.4);
+
+  /* === SURFACES (Glassmorphism) === */
+  --surface-base: rgba(255, 255, 255, 0.1);
+  --surface-hover: rgba(255, 255, 255, 0.15);
+  --surface-elevated: rgba(255, 255, 255, 0.2);
+
+  /* === BORDERS === */
+  --border-base: rgba(255, 255, 255, 0.2);
+  --border-hover: rgba(255, 255, 255, 0.3);
+  --border-focus: rgba(236, 72, 153, 0.6);
+
+  /* === SHADOWS === */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.2);
+  --shadow-glow: 0 0 20px rgba(236, 72, 153, 0.3);
+
+  /* === EFFECTS === */
+  --backdrop-blur: 10px;
+  --backdrop-saturate: 180%;
+}
+
+/* ================================================================
+   TEMA 1: NOSTALGIA NEÓN 🌃
+   Mood: Energético y futurista
+   Mejor para: Gaming, sci-fi, contenido tech
+   ================================================================ */
+
+[data-theme="neon-nostalgia"] {
+  /* === BACKGROUND === */
+  --bg-gradient-start: #0D0D2B;
+  --bg-gradient-end: #2E0249;
+  --bg-gradient: linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+
+  /* === PRIMARY ACCENT === */
+  --primary-start: #FF00AA;
+  --primary-end: #00FFD1;
+  --primary-gradient: linear-gradient(135deg, var(--primary-start) 0%, var(--primary-end) 100%);
+  --primary-solid: #FF00AA;
+
+  /* === SECONDARY ACCENT === */
+  --secondary-accent: #8B5CF6;
+  --secondary-gradient: linear-gradient(135deg, #8B5CF6 0%, #FF00AA 100%);
+
+  /* === STATUS COLORS === */
+  --color-success: #57F287;
+  --color-success-bg: rgba(87, 242, 135, 0.1);
+  --color-success-border: rgba(87, 242, 135, 0.3);
+
+  --color-warning: #FEE75C;
+  --color-warning-bg: rgba(254, 231, 92, 0.1);
+  --color-warning-border: rgba(254, 231, 92, 0.3);
+
+  --color-error: #ED4245;
+  --color-error-bg: rgba(237, 66, 69, 0.1);
+  --color-error-border: rgba(237, 66, 69, 0.3);
+
+  --color-info: #00BFFF;
+  --color-info-bg: rgba(0, 191, 255, 0.1);
+  --color-info-border: rgba(0, 191, 255, 0.3);
+
+  /* === TEXT === */
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(255, 255, 255, 0.8);
+  --text-tertiary: rgba(255, 255, 255, 0.6);
+  --text-disabled: rgba(255, 255, 255, 0.4);
+
+  /* === SURFACES === */
+  --surface-base: rgba(139, 92, 246, 0.1);
+  --surface-hover: rgba(139, 92, 246, 0.2);
+  --surface-elevated: rgba(139, 92, 246, 0.15);
+
+  /* === BORDERS === */
+  --border-base: rgba(139, 92, 246, 0.3);
+  --border-hover: rgba(139, 92, 246, 0.5);
+  --border-focus: rgba(255, 0, 170, 0.6);
+
+  /* === SHADOWS === */
+  --shadow-sm: 0 2px 8px rgba(255, 0, 170, 0.2);
+  --shadow-md: 0 4px 16px rgba(255, 0, 170, 0.3);
+  --shadow-lg: 0 8px 32px rgba(255, 0, 170, 0.4);
+  --shadow-glow: 0 0 20px rgba(255, 0, 170, 0.6), 0 0 40px rgba(255, 0, 170, 0.3);
+
+  /* === EFFECTS === */
+  --backdrop-blur: 10px;
+  --backdrop-saturate: 180%;
+}
+
+/* ================================================================
+   TEMA 2: AURORA BOREAL 🌌
+   Mood: Sereno y mágico
+   Mejor para: Documentales, contenido de naturaleza, chill
+   ================================================================ */
+
+[data-theme="aurora-borealis"] {
+  /* === BACKGROUND === */
+  --bg-gradient-start: #1F214D;
+  --bg-gradient-end: #0B3D39;
+  --bg-gradient: linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+
+  /* === PRIMARY ACCENT === */
+  --primary-start: #98FF98;
+  --primary-end: #A941D2;
+  --primary-gradient: linear-gradient(135deg, var(--primary-start) 0%, var(--primary-end) 100%);
+  --primary-solid: #98FF98;
+
+  /* === SECONDARY ACCENT === */
+  --secondary-accent: #FF4DA6;
+  --secondary-gradient: linear-gradient(135deg, #98FF98 0%, #A941D2 100%);
+
+  /* === STATUS COLORS === */
+  --color-success: #34D399;
+  --color-success-bg: rgba(52, 211, 153, 0.1);
+  --color-success-border: rgba(52, 211, 153, 0.3);
+
+  --color-warning: #FBBF24;
+  --color-warning-bg: rgba(251, 191, 36, 0.1);
+  --color-warning-border: rgba(251, 191, 36, 0.3);
+
+  --color-error: #F87171;
+  --color-error-bg: rgba(248, 113, 113, 0.1);
+  --color-error-border: rgba(248, 113, 113, 0.3);
+
+  --color-info: #60A5FA;
+  --color-info-bg: rgba(96, 165, 250, 0.1);
+  --color-info-border: rgba(96, 165, 250, 0.3);
+
+  /* === TEXT === */
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(255, 255, 255, 0.8);
+  --text-tertiary: rgba(255, 255, 255, 0.6);
+  --text-disabled: rgba(255, 255, 255, 0.4);
+
+  /* === SURFACES === */
+  --surface-base: rgba(152, 255, 152, 0.08);
+  --surface-hover: rgba(152, 255, 152, 0.12);
+  --surface-elevated: rgba(152, 255, 152, 0.15);
+
+  /* === BORDERS === */
+  --border-base: rgba(152, 255, 152, 0.2);
+  --border-hover: rgba(152, 255, 152, 0.35);
+  --border-focus: rgba(169, 65, 210, 0.6);
+
+  /* === SHADOWS === */
+  --shadow-sm: 0 2px 8px rgba(152, 255, 152, 0.15);
+  --shadow-md: 0 4px 16px rgba(152, 255, 152, 0.2);
+  --shadow-lg: 0 8px 32px rgba(152, 255, 152, 0.25);
+  --shadow-glow: 0 0 20px rgba(152, 255, 152, 0.4);
+
+  /* === EFFECTS === */
+  --backdrop-blur: 10px;
+  --backdrop-saturate: 180%;
+}
+
+/* ================================================================
+   TEMA 3: BLURPLE ELEGANTE 💜
+   Mood: Moderno y confiable
+   Mejor para: Comunidades gaming, usuarios de Discord/Twitch
+   ================================================================ */
+
+[data-theme="blurple-elegant"] {
+  /* === BACKGROUND === */
+  --bg-gradient-start: #0E0E10;
+  --bg-gradient-end: #23272A;
+  --bg-gradient: linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+
+  /* === PRIMARY ACCENT === */
+  --primary-start: #8956FB;
+  --primary-end: #9146FF;
+  --primary-gradient: linear-gradient(135deg, var(--primary-start) 0%, var(--primary-end) 100%);
+  --primary-solid: #9146FF;
+
+  /* === SECONDARY ACCENT === */
+  --secondary-accent: #FF6F61;
+  --secondary-gradient: linear-gradient(135deg, #8956FB 0%, #FF6F61 100%);
+
+  /* === STATUS COLORS === */
+  --color-success: #57F287;
+  --color-success-bg: rgba(87, 242, 135, 0.1);
+  --color-success-border: rgba(87, 242, 135, 0.3);
+
+  --color-warning: #FEE75C;
+  --color-warning-bg: rgba(254, 231, 92, 0.1);
+  --color-warning-border: rgba(254, 231, 92, 0.3);
+
+  --color-error: #ED4245;
+  --color-error-bg: rgba(237, 66, 69, 0.1);
+  --color-error-border: rgba(237, 66, 69, 0.3);
+
+  --color-info: #00A8A8;
+  --color-info-bg: rgba(0, 168, 168, 0.1);
+  --color-info-border: rgba(0, 168, 168, 0.3);
+
+  /* === TEXT === */
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(255, 255, 255, 0.7);
+  --text-tertiary: rgba(255, 255, 255, 0.6);
+  --text-disabled: rgba(255, 255, 255, 0.4);
+
+  /* === SURFACES === */
+  --surface-base: rgba(255, 255, 255, 0.05);
+  --surface-hover: rgba(255, 255, 255, 0.08);
+  --surface-elevated: rgba(255, 255, 255, 0.1);
+
+  /* === BORDERS === */
+  --border-base: rgba(145, 70, 255, 0.25);
+  --border-hover: rgba(145, 70, 255, 0.4);
+  --border-focus: rgba(145, 70, 255, 0.6);
+
+  /* === SHADOWS === */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(145, 70, 255, 0.4);
+
+  /* === EFFECTS === */
+  --backdrop-blur: 10px;
+  --backdrop-saturate: 180%;
+}
+
+/* ================================================================
+   TEMA 4: NOCHE DORADA 🌟
+   Mood: Elegante y exclusivo
+   Mejor para: Eventos premium, contenido clásico
+   ================================================================ */
+
+[data-theme="golden-night"] {
+  /* === BACKGROUND === */
+  --bg-gradient-start: #0F172A;
+  --bg-gradient-end: #1E293B;
+  --bg-gradient: linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+
+  /* === PRIMARY ACCENT === */
+  --primary-start: #FACC15;
+  --primary-end: #FFD700;
+  --primary-gradient: linear-gradient(135deg, var(--primary-start) 0%, var(--primary-end) 100%);
+  --primary-solid: #FFD700;
+
+  /* === SECONDARY ACCENT === */
+  --secondary-accent: #8B5CF6;
+  --secondary-gradient: linear-gradient(135deg, #FACC15 0%, #8B5CF6 100%);
+
+  /* === STATUS COLORS === */
+  --color-success: #22C55E;
+  --color-success-bg: rgba(34, 197, 94, 0.1);
+  --color-success-border: rgba(34, 197, 94, 0.3);
+
+  --color-warning: #EAB308;
+  --color-warning-bg: rgba(234, 179, 8, 0.1);
+  --color-warning-border: rgba(234, 179, 8, 0.3);
+
+  --color-error: #EF4444;
+  --color-error-bg: rgba(239, 68, 68, 0.1);
+  --color-error-border: rgba(239, 68, 68, 0.3);
+
+  --color-info: #0EA5E9;
+  --color-info-bg: rgba(14, 165, 233, 0.1);
+  --color-info-border: rgba(14, 165, 233, 0.3);
+
+  /* === TEXT === */
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(255, 255, 255, 0.8);
+  --text-tertiary: rgba(255, 255, 255, 0.6);
+  --text-disabled: rgba(255, 255, 255, 0.4);
+
+  /* === SURFACES === */
+  --surface-base: rgba(250, 204, 21, 0.05);
+  --surface-hover: rgba(250, 204, 21, 0.08);
+  --surface-elevated: rgba(250, 204, 21, 0.1);
+
+  /* === BORDERS === */
+  --border-base: rgba(250, 204, 21, 0.2);
+  --border-hover: rgba(250, 204, 21, 0.35);
+  --border-focus: rgba(250, 204, 21, 0.6);
+
+  /* === SHADOWS === */
+  --shadow-sm: 0 2px 8px rgba(250, 204, 21, 0.1);
+  --shadow-md: 0 4px 16px rgba(250, 204, 21, 0.15);
+  --shadow-lg: 0 8px 32px rgba(250, 204, 21, 0.2);
+  --shadow-glow: 0 0 20px rgba(250, 204, 21, 0.3);
+
+  /* === EFFECTS === */
+  --backdrop-blur: 10px;
+  --backdrop-saturate: 180%;
+}
+
+/* ================================================================
+   APLICACIÓN GLOBAL DE VARIABLES
+   ================================================================ */
+
+body {
+  background: var(--bg-gradient);
+  color: var(--text-primary);
+  transition: background 0.5s ease, color 0.3s ease;
+}
+
+/* Smooth transitions when changing themes */
+* {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-duration: 0.3s;
+  transition-timing-function: ease;
+}
+
+/* Disable transitions on elements that need instant feedback */
+button:active,
+input:focus,
+.no-transition {
+  transition: none !important;
+}

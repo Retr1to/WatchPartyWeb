@@ -1,0 +1,58 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Fondo -->
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0D0D2B"/>
+      <stop offset="100%" stop-color="#2E0249"/>
+    </linearGradient>
+
+    <!-- Gradiente neón primario (fucsia -> cian) -->
+    <linearGradient id="primaryNeon" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF00AA"/>
+      <stop offset="100%" stop-color="#00FFD1"/>
+    </linearGradient>
+
+    <!-- Glow neón -->
+    <filter id="neonGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feColorMatrix
+        in="blur"
+        type="matrix"
+        values="0 0 0 0 1
+                0 0 0 0 0.4
+                0 0 0 0 0.7
+                0 0 0 0.9 0" />
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Fondo redondeado -->
+  <rect x="16" y="16" width="224" height="224" rx="56" ry="56"
+        fill="url(#bgGradient)"/>
+
+  <!-- Triángulo de play (borde neón) -->
+  <polygon
+    points="96,80 96,176 176,128"
+    fill="none"
+    stroke="url(#primaryNeon)"
+    stroke-width="12"
+    stroke-linejoin="round"
+    filter="url(#neonGlow)"/>
+
+  <!-- Ondas de sonido (arcos) -->
+  <g fill="none"
+     stroke="url(#primaryNeon)"
+     stroke-linecap="round"
+     stroke-width="8"
+     filter="url(#neonGlow)">
+    <!-- Onda pequeña -->
+    <path d="M186 102 A32 32 0 0 1 186 154" />
+    <!-- Onda mediana -->
+    <path d="M198 92 A46 46 0 0 1 198 164" />
+    <!-- Onda grande -->
+    <path d="M210 82 A60 60 0 0 1 210 174" />
+  </g>
+</svg>
