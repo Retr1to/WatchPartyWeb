@@ -1,16 +1,24 @@
-using System.Collections.Concurrent;
-using System.Net.WebSockets;
-using Microsoft.AspNetCore.Http;
-using System.IO;
+﻿using System.Net.WebSockets;
+using System.Text;
+using System.Text.Json;
+using WatchPartyBackend.Models;
+using WatchPartyBackend.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(options =>
+{
+    options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
+});
 
-// Add services to the container.
+// Registrar RoomManager como Singleton
+builder.Services.AddSingleton<RoomManager>();
+
+// Add CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:4200") // Adjust to frontend URL
+        policy.WithOrigins("http://localhost:4200")
               .AllowAnyMethod()
               .AllowAnyHeader()
               .AllowCredentials();
@@ -19,66 +27,290 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// In-memory storage for rooms and connections
-var rooms = new ConcurrentDictionary<string, ConcurrentBag<WebSocket>>();
-
 app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseCors("AllowFrontend");
 app.UseWebSockets();
 
-app.MapGet("/", () => "Hello World!");
+var roomManager = app.Services.GetRequiredService<RoomManager>();
 
-// WebSocket endpoint for rooms
+app.MapGet("/", () => "WatchParty Backend is running!");
+
+// ============================================================
+// WEBSOCKET ENDPOINT - Conexión con manejo de mensajes JSON
+// ============================================================
 app.Map("/ws/{roomId}", async (HttpContext context, string roomId) =>
 {
-    if (context.WebSockets.IsWebSocketRequest)
-    {
-        var webSocket = await context.WebSockets.AcceptWebSocketAsync();
-        var connections = rooms.GetOrAdd(roomId, _ => new ConcurrentBag<WebSocket>());
-        connections.Add(webSocket);
-
-        await HandleWebSocketAsync(webSocket, roomId, connections);
-    }
-    else
+    if (!context.WebSockets.IsWebSocketRequest)
     {
         context.Response.StatusCode = 400;
+        return;
     }
+
+    // Generar un ID único para este usuario
+    var userId = context.Request.Query["userId"].ToString();
+    if (string.IsNullOrEmpty(userId))
+    {
+        userId = Guid.NewGuid().ToString();
+    }
+
+    var username = context.Request.Query["username"].ToString();
+    if (string.IsNullOrEmpty(username))
+    {
+        username = "Usuario";
+    }
+
+    var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+
+    // Obtener o crear sala y agregar conexión (✅ AGREGADO username)
+    var room = roomManager.GetOrCreateRoom(roomId, userId);
+    roomManager.AddConnection(roomId, userId, webSocket, username);
+
+    var isHost = roomManager.IsHost(roomId, userId);
+
+    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] User {userId} ({username}) joined room {roomId} as {(isHost ? "HOST" : "VIEWER")}");
+
+    // ✅✅✅ NUEVO: Enviar lista de usuarios actuales al nuevo usuario ✅✅✅
+    var currentUsers = roomManager.GetRoomUsers(roomId);
+    var usersList = currentUsers.Select(u => new
+    {
+        userId = u.Key,
+        username = u.Value,
+        isHost = roomManager.IsHost(roomId, u.Key)
+    }).ToList();
+
+    // Serializar manualmente la lista de usuarios
+    var usersJson = JsonSerializer.Serialize(new { users = usersList }, new JsonSerializerOptions
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    });
+
+    await roomManager.SendToUser(roomId, userId, new WebSocketMessage
+    {
+        Type = "room_state",
+        Message = usersJson
+    });
+    // ✅✅✅ FIN ✅✅✅
+
+    // Enviar estado actual del video al nuevo usuario
+    var currentState = roomManager.GetVideoState(roomId);
+    if (currentState != null && !string.IsNullOrEmpty(currentState.VideoFileName))
+    {
+        await roomManager.SendToUser(roomId, userId, new WebSocketMessage
+        {
+            Type = "state",
+            IsHost = false,
+            State = currentState
+        });
+    }
+
+    // Notificar a todos que alguien se unió
+    await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+    {
+        Type = "user_joined",
+        UserId = userId,
+        Username = username,
+        IsHost = isHost,
+        Message = $"User {username} joined the room"
+    });
+
+    // Manejar mensajes del WebSocket
+    await HandleWebSocketMessages(webSocket, roomId, userId, roomManager);
 });
 
-async Task HandleWebSocketAsync(WebSocket webSocket, string roomId, ConcurrentBag<WebSocket> connections)
+// ============================================================
+// FUNCIÓN: Manejo de mensajes WebSocket
+// ============================================================
+async Task HandleWebSocketMessages(WebSocket webSocket, string roomId, string userId, RoomManager roomManager)
 {
     var buffer = new byte[1024 * 4];
-    WebSocketReceiveResult result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
 
-    while (!result.CloseStatus.HasValue)
+    try
     {
-        // For now, just echo or broadcast messages
-        var message = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
-        // Broadcast to all in room
-        foreach (var conn in connections)
+        WebSocketReceiveResult result = await webSocket.ReceiveAsync(
+            new ArraySegment<byte>(buffer),
+            CancellationToken.None
+        );
+
+        while (!result.CloseStatus.HasValue)
         {
-            if (conn.State == WebSocketState.Open)
+            var messageJson = Encoding.UTF8.GetString(buffer, 0, result.Count);
+
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Received from {userId}: {messageJson}");
+
+            // Deserializar el mensaje
+            WebSocketMessage? message;
+            try
             {
-                await conn.SendAsync(new ArraySegment<byte>(buffer, 0, result.Count), result.MessageType, result.EndOfMessage, CancellationToken.None);
+                message = JsonSerializer.Deserialize<WebSocketMessage>(messageJson);
             }
+            catch (JsonException)
+            {
+                Console.WriteLine($"Invalid JSON received from {userId}");
+                result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                continue;
+            }
+
+            if (message == null)
+            {
+                result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                continue;
+            }
+
+            // Procesar según el tipo de mensaje
+            await ProcessMessage(roomId, userId, message, roomManager);
+
+            // Recibir siguiente mensaje
+            result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
         }
 
-        result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+        // Usuario se desconectó
+        await webSocket.CloseAsync(
+            result.CloseStatus.Value,
+            result.CloseStatusDescription,
+            CancellationToken.None
+        );
     }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Error with user {userId}: {ex.Message}");
+    }
+    finally
+    {
+        // Limpiar conexión
+        roomManager.RemoveConnection(roomId, userId);
 
-    await webSocket.CloseAsync(result.CloseStatus.Value, result.CloseStatusDescription, CancellationToken.None);
-    connections.TryTake(out _); // Remove from connections
+        // Notificar que el usuario se fue
+        await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+        {
+            Type = "user_left",
+            UserId = userId,
+            Message = $"User {userId} left the room"
+        });
+
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] User {userId} left room {roomId}");
+    }
 }
 
-// Video upload endpoint (host only)
+// ============================================================
+// FUNCIÓN: Procesar diferentes tipos de mensajes
+// ============================================================
+async Task ProcessMessage(string roomId, string userId, WebSocketMessage message, RoomManager roomManager)
+{
+    var isHost = roomManager.IsHost(roomId, userId);
+
+    switch (message.Type.ToLower())
+    {
+        case "play":
+            if (!isHost)
+            {
+                Console.WriteLine($"User {userId} tried to PLAY but is not host");
+                return;
+            }
+
+            // Actualizar estado
+            var playState = roomManager.GetVideoState(roomId);
+            if (playState != null)
+            {
+                playState.IsPlaying = true;
+                playState.CurrentTime = message.Timestamp ?? playState.CurrentTime;
+                roomManager.UpdateVideoState(roomId, playState);
+            }
+
+            // Broadcast a todos
+            await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+            {
+                Type = "play",
+                Timestamp = message.Timestamp,
+                IsHost = true,
+                UserId = userId
+            });
+
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] HOST {userId} pressed PLAY at {message.Timestamp}s");
+            break;
+
+        case "pause":
+            if (!isHost)
+            {
+                Console.WriteLine($"User {userId} tried to PAUSE but is not host");
+                return;
+            }
+
+            // Actualizar estado
+            var pauseState = roomManager.GetVideoState(roomId);
+            if (pauseState != null)
+            {
+                pauseState.IsPlaying = false;
+                pauseState.CurrentTime = message.Timestamp ?? pauseState.CurrentTime;
+                roomManager.UpdateVideoState(roomId, pauseState);
+            }
+
+            // Broadcast a todos
+            await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+            {
+                Type = "pause",
+                Timestamp = message.Timestamp,
+                IsHost = true,
+                UserId = userId
+            });
+
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] HOST {userId} pressed PAUSE at {message.Timestamp}s");
+            break;
+
+        case "seek":
+            if (!isHost)
+            {
+                Console.WriteLine($"User {userId} tried to SEEK but is not host");
+                return;
+            }
+
+            // Actualizar estado
+            var seekState = roomManager.GetVideoState(roomId);
+            if (seekState != null)
+            {
+                seekState.CurrentTime = message.Timestamp ?? 0;
+                roomManager.UpdateVideoState(roomId, seekState);
+            }
+
+            // Broadcast a todos
+            await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+            {
+                Type = "seek",
+                Timestamp = message.Timestamp,
+                IsHost = true,
+                UserId = userId
+            });
+
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] HOST {userId} SEEKED to {message.Timestamp}s");
+            break;
+
+        case "chat":
+            // Broadcast mensaje de chat
+            await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+            {
+                Type = "chat",
+                UserId = userId,
+                Message = message.Message,
+                IsHost = isHost
+            });
+            break;
+
+        default:
+            Console.WriteLine($"Unknown message type: {message.Type}");
+            break;
+    }
+}
+
+// ============================================================
+// VIDEO UPLOAD ENDPOINT - Solo el HOST puede subir
+// ============================================================
 app.MapPost("/upload/{roomId}", async (HttpContext context, string roomId) =>
 {
-    // Check if user is host: require header "X-Is-Host" with value "true"
-    if (!context.Request.Headers.TryGetValue("X-Is-Host", out var isHost) || isHost != "true")
+    // Verificar header X-Is-Host
+    if (!context.Request.Headers.TryGetValue("X-Is-Host", out var isHostHeader) || isHostHeader != "true")
     {
         context.Response.StatusCode = 403;
-        await context.Response.WriteAsync("Forbidden: Host access required");
+        await context.Response.WriteAsync("Forbidden: Only host can upload videos");
         return;
     }
 
@@ -99,7 +331,7 @@ app.MapPost("/upload/{roomId}", async (HttpContext context, string roomId) =>
         return;
     }
 
-    // Save file to wwwroot/videos/roomId/filename
+    // Guardar archivo
     var videosDir = Path.Combine("wwwroot", "videos", roomId);
     Directory.CreateDirectory(videosDir);
     var filePath = Path.Combine(videosDir, file.FileName);
@@ -109,22 +341,46 @@ app.MapPost("/upload/{roomId}", async (HttpContext context, string roomId) =>
         await file.CopyToAsync(stream);
     }
 
-    // Notify all clients in the room via WebSocket
-    if (rooms.TryGetValue(roomId, out var connections))
+    // Actualizar estado del video en la sala
+    var videoState = new VideoState
     {
-        var message = $"New video uploaded: {file.FileName}";
-        var messageBytes = System.Text.Encoding.UTF8.GetBytes(message);
-        foreach (var conn in connections)
-        {
-            if (conn.State == WebSocketState.Open)
-            {
-                await conn.SendAsync(new ArraySegment<byte>(messageBytes), WebSocketMessageType.Text, true, CancellationToken.None);
-            }
-        }
-    }
+        VideoFileName = file.FileName,
+        CurrentTime = 0,
+        IsPlaying = false
+    };
+    roomManager.UpdateVideoState(roomId, videoState);
+
+    // Notificar a todos los usuarios
+    await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+    {
+        Type = "video_uploaded",
+        VideoFileName = file.FileName,
+        Message = $"New video uploaded: {file.FileName}"
+    });
+
+    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Video uploaded to room {roomId}: {file.FileName}");
 
     context.Response.StatusCode = 200;
     await context.Response.WriteAsync($"Video uploaded successfully: {file.FileName}");
+});
+
+// ============================================================
+// ENDPOINT: Listar videos disponibles en una sala
+// ============================================================
+app.MapGet("/videos/{roomId}", (string roomId) =>
+{
+    var videosDir = Path.Combine("wwwroot", "videos", roomId);
+
+    if (!Directory.Exists(videosDir))
+    {
+        return Results.Ok(new { videos = Array.Empty<string>() });
+    }
+
+    var videoFiles = Directory.GetFiles(videosDir)
+        .Select(Path.GetFileName)
+        .ToArray();
+
+    return Results.Ok(new { videos = videoFiles });
 });
 
 app.Run();
