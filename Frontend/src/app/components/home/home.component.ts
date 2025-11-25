@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SocketService } from '../../services/socket.service';
+import { ToastService } from '../../services/toast.service';
 import { AnimatedWaveIconComponent } from '../animated-wave-icon/animated-wave-icon.component';
 
 @Component({
@@ -15,25 +16,26 @@ import { AnimatedWaveIconComponent } from '../animated-wave-icon/animated-wave-i
 export class HomeComponent {
   roomCode: string = '';
   username: string = '';
-  errorMessage: string = '';
   showJoinDialog: boolean = false;
 
   constructor(
     private socketService: SocketService,
+    private toastService: ToastService,
     private router: Router
   ) {
     // Navegar cuando se crea o se une a una sala
     this.socketService.onRoomCreated().subscribe(({ roomCode, room }) => {
+      this.toastService.success(`Sala ${roomCode} creada exitosamente`);
       this.router.navigate(['/room', roomCode], { state: { room } });
     });
 
     this.socketService.onRoomJoined().subscribe(({ room }) => {
+      this.toastService.success(`Te uniste a la sala ${this.roomCode.toUpperCase()}`);
       this.router.navigate(['/room', this.roomCode.toUpperCase()], { state: { room } });
     });
 
     this.socketService.onRoomError().subscribe(({ message }) => {
-      this.errorMessage = message;
-      setTimeout(() => this.errorMessage = '', 3000);
+      this.toastService.error(message);
     });
   }
 
@@ -48,8 +50,7 @@ export class HomeComponent {
 
   joinRoom(): void {
     if (!this.roomCode.trim()) {
-      this.errorMessage = 'Por favor ingresa un código de sala';
-      setTimeout(() => this.errorMessage = '', 3000);
+      this.toastService.warning('Por favor ingresa un código de sala');
       return;
     }
 
@@ -60,6 +61,5 @@ export class HomeComponent {
   closeDialog(): void {
     this.showJoinDialog = false;
     this.roomCode = '';
-    this.errorMessage = '';
   }
 }

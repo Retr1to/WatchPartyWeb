@@ -33,19 +33,15 @@
     <button class="btn btn-secondary" (click)="showJoinRoomDialog()">
       Unirse a Sala
     </button>
-
-    <div class="error-message" *ngIf="errorMessage">
-      {{ errorMessage }}
-    </div>
   </div>
 
   <!-- Join Room Dialog -->
   <div class="modal" *ngIf="showJoinDialog" (click)="closeDialog()">
     <div class="modal-content" (click)="$event.stopPropagation()">
       <h2>Unirse a Sala</h2>
-      <input 
-        type="text" 
-        [(ngModel)]="roomCode" 
+      <input
+        type="text"
+        [(ngModel)]="roomCode"
         placeholder="Código de sala (ej: ADDHR)"
         maxlength="6"
         (input)="roomCode = roomCode.toUpperCase()"
@@ -53,9 +49,6 @@
       <div class="modal-buttons">
         <button class="btn btn-secondary" (click)="closeDialog()">Cancelar</button>
         <button class="btn btn-primary" (click)="joinRoom()">Unirse</button>
-      </div>
-      <div class="error-message" *ngIf="errorMessage">
-        {{ errorMessage }}
       </div>
     </div>
   </div>

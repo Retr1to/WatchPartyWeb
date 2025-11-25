@@ -3,6 +3,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SocketService, Room, Participant } from '../../services/socket.service';
+import { ToastService } from '../../services/toast.service';
 
 @Component({
   selector: 'app-room',
@@ -25,7 +26,8 @@ export class RoomComponent implements OnInit, OnDestroy {
   constructor(
     private route: ActivatedRoute,
     private router: Router,
-    private socketService: SocketService
+    private socketService: SocketService,
+    private toastService: ToastService
   ) {}
 
   ngOnInit(): void {
@@ -76,19 +78,26 @@ export class RoomComponent implements OnInit, OnDestroy {
 
     this.socketService.onParticipantJoined().subscribe(({ participants }) => {
       if (this.room) {
+        const oldCount = this.room.participants.length;
         this.room.participants = participants;
+        if (participants.length > oldCount) {
+          const newParticipant = participants[participants.length - 1];
+          this.toastService.info(`${newParticipant.username} se unió a la sala`);
+        }
       }
     });
 
     this.socketService.onParticipantLeft().subscribe(({ participants }) => {
       if (this.room) {
         this.room.participants = participants;
+        this.toastService.info('Un participante salió de la sala');
       }
     });
 
     this.socketService.onVideoChanged().subscribe(({ url }) => {
       this.videoUrl = url;
       this.newVideoUrl = '';
+      this.toastService.success('Video cambiado exitosamente');
       if (this.videoPlayer) {
         this.videoPlayer.nativeElement.load();
       }
@@ -123,6 +132,10 @@ export class RoomComponent implements OnInit, OnDestroy {
           p.isHost = p.id === newHostId;
         });
         this.findCurrentUser();
+        const newHost = this.room.participants.find(p => p.id === newHostId);
+        if (newHost) {
+          this.toastService.warning(`${newHost.username} es ahora el anfitrión`);
+        }
       }
     });
   }
@@ -182,6 +195,7 @@ export class RoomComponent implements OnInit, OnDestroy {
 
   copyRoomCode(): void {
     navigator.clipboard.writeText(this.roomCode);
+    this.toastService.success(`Código ${this.roomCode} copiado al portapapeles`);
   }
 
   leaveRoom(): void {

@@ -9,7 +9,9 @@
       "Bash(npm start)",
       "Bash(npx ng serve:*)",
       "Bash(git checkout:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nAdd complete theme system with 5 color palettes and animated logo\n\nFeatures:\n- 5 theme palettes (Nostalgia Neón, Aurora Boreal, Atardecer Tropical, Blurple Elegante, Noche Dorada)\n- Theme selector with floating button UI\n- Animated wave icon component (play button + sound waves)\n- Full CSS variables integration across all components\n- Theme persistence in localStorage\n- Updated home and room components to use theme system\n\nComponents:\n- New: AnimatedWaveIconComponent with theme-adaptive colors\n- New: ThemeSelectorComponent with elegant dropdown\n- New: ThemeService for theme management\n- Updated: HomeComponent CSS refactored with variables\n- Updated: RoomComponent CSS refactored with variables\n\nConfiguration:\n- themes.css with 800+ lines of theme definitions\n- angular.json updated to include themes.css\n- index.html with default theme set\n\nDocumentation:\n- DESIGN_CONTEXT.md with current design analysis\n- PALETAS_PROPUESTAS.md with theme research\n- Animated icon component README with usage guide\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []
