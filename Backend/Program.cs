@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
+using Microsoft.AspNetCore.Http;
+using System.IO;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -68,5 +70,61 @@ async Task HandleWebSocketAsync(WebSocket webSocket, string roomId, ConcurrentBa
     await webSocket.CloseAsync(result.CloseStatus.Value, result.CloseStatusDescription, CancellationToken.None);
     connections.TryTake(out _); // Remove from connections
 }
+
+// Video upload endpoint (admin only)
+app.MapPost("/upload/{roomId}", async (HttpContext context, string roomId) =>
+{
+    // Simple admin check: require header "X-Admin-Key" with value "admin123" (change in production)
+    if (!context.Request.Headers.TryGetValue("X-Admin-Key", out var adminKey) || adminKey != "admin123")
+    {
+        context.Response.StatusCode = 403;
+        await context.Response.WriteAsync("Forbidden: Admin access required");
+        return;
+    }
+
+    if (!context.Request.HasFormContentType)
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsync("Bad Request: Expected multipart form data");
+        return;
+    }
+
+    var form = await context.Request.ReadFormAsync();
+    var file = form.Files.GetFile("video");
+
+    if (file == null || file.Length == 0)
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsync("Bad Request: No video file provided");
+        return;
+    }
+
+    // Save file to wwwroot/videos/roomId/filename
+    var videosDir = Path.Combine("wwwroot", "videos", roomId);
+    Directory.CreateDirectory(videosDir);
+    var filePath = Path.Combine(videosDir, file.FileName);
+
+    using (var stream = new FileStream(filePath, FileMode.Create))
+    {
+        await file.CopyToAsync(stream);
+    }
+
+    // Notify all clients in the room via WebSocket
+    if (rooms.TryGetValue(roomId, out var connections))
+    {
+        var message = $"New video uploaded: {file.FileName}";
+        var messageBytes = System.Text.Encoding.UTF8.GetBytes(message);
+        foreach (var conn in connections)
+        {
+            if (conn.State == WebSocketState.Open)
+            {
+                await conn.SendAsync(new ArraySegment<byte>(messageBytes), WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+        }
+    }
+
+    context.Response.StatusCode = 200;
+    await context.Response.WriteAsync($"Video uploaded successfully: {file.FileName}");
+});
 
 app.Run();
