@@ -136,7 +136,7 @@ export class RoomComponent implements OnInit, OnDestroy {
       }
     });
 
-    // ✅ NUEVO: Escuchar cuando se sube un video
+    // Escuchar cuando se sube un video
     this.socketService.onMessage().subscribe((message: any) => {
       if (message.type === 'video_uploaded') {
         console.log('[RoomComponent] Video uploaded notification:', message);

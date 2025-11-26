@@ -57,11 +57,11 @@ export class SocketService {
   private videoSeekSubject = new Subject<{ currentTime: number }>();
   private hostChangedSubject = new Subject<{ newHostId: string }>();
   
-  // ✅ NUEVO: Subject para room_state
+  // Subject para room_state
   private roomStateSubject = new Subject<{ users: Participant[] }>();
   public roomState$ = this.roomStateSubject.asObservable();
   
-  // ✅ NUEVO: Subject para todos los mensajes (raw)
+  // Subject para todos los mensajes (raw)
   private messageSubject = new Subject<any>();
   
   private connectionStateSubject = new BehaviorSubject<boolean>(false);
@@ -363,7 +363,7 @@ export class SocketService {
     return this.hostChangedSubject.asObservable();
   }
 
-  // ✅ NUEVO: Observable para todos los mensajes raw
+  // Observable para todos los mensajes raw
   onMessage(): Observable<any> {
     return this.messageSubject.asObservable();
   }

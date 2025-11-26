@@ -93,7 +93,7 @@ namespace WatchPartyBackend.Services
         }
 
         /// <summary>
-        /// ✅ NUEVO: Obtiene la lista de usuarios conectados con sus nombres
+        /// Obtiene la lista de usuarios conectados con sus nombres
         /// </summary>
         public Dictionary<string, string> GetRoomUsers(string roomId)
         {

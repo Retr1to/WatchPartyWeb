@@ -297,7 +297,7 @@ async Task ProcessMessage(string roomId, string userId, WebSocketMessage message
             break;
 
         case "sync_request":
-            // ✅ NUEVO: Usuario pide sincronizarse
+            // Usuario pide sincronizarse
             var currentState = roomManager.GetVideoState(roomId);
             if (currentState != null)
             {
@@ -442,7 +442,7 @@ app.MapGet("/videos/{roomId}", (string roomId) =>
 });
 
 // ============================================================
-// ✅ NUEVO: ENDPOINT para obtener el estado actual de una sala
+// ENDPOINT para obtener el estado actual de una sala
 // ============================================================
 app.MapGet("/room/{roomId}/state", (string roomId) =>
 {

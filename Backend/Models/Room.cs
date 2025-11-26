@@ -30,7 +30,7 @@ namespace WatchPartyBackend.Models
             = new ConcurrentDictionary<string, WebSocket>();
 
         /// <summary>
-        /// ✅ NUEVO: Nombres de usuarios: Key = UserId, Value = Username
+        /// Nombres de usuarios: Key = UserId, Value = Username
         /// </summary>
         public ConcurrentDictionary<string, string> Usernames { get; set; }
             = new ConcurrentDictionary<string, string>();
