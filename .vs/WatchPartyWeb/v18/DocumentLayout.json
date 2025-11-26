@@ -1,0 +1,37 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Users\\Hp\\Documentos\\8vo Semestre\\Aplicaiones Web avanzadas\\WatchPartyWeb\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{F1E1884D-55B2-D9A8-FFEE-32BEE7A5F7F0}|Backend\\WatchPartyBackend.csproj|c:\\users\\hp\\documentos\\8vo semestre\\aplicaiones web avanzadas\\watchpartyweb\\backend\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{F1E1884D-55B2-D9A8-FFEE-32BEE7A5F7F0}|Backend\\WatchPartyBackend.csproj|solutionrelative:backend\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "Program.cs",
+              "DocumentMoniker": "C:\\Users\\Hp\\Documentos\\8vo Semestre\\Aplicaiones Web avanzadas\\WatchPartyWeb\\Backend\\Program.cs",
+              "RelativeDocumentMoniker": "Backend\\Program.cs",
+              "ToolTip": "C:\\Users\\Hp\\Documentos\\8vo Semestre\\Aplicaiones Web avanzadas\\WatchPartyWeb\\Backend\\Program.cs",
+              "RelativeToolTip": "Backend\\Program.cs",
+              "ViewState": "AgIAAMgBAAAAAAAAAAAswNcBAAAKAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-11-25T23:59:20.23Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

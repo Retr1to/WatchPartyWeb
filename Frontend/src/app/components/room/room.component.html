@@ -43,6 +43,15 @@
           <span>Fuente de Video</span>
         </div>
         
+        <!-- ✅ INPUT OCULTO PARA SELECCIONAR ARCHIVO -->
+        <input 
+          #fileInput 
+          type="file" 
+          accept="video/mp4,video/webm,video/ogg,video/mov"
+          (change)="onFileSelected($event)"
+          style="display: none"
+        />
+        
         <div class="video-url-display" *ngIf="!isChangingVideo">
           <div class="current-url" *ngIf="videoUrl">
             <span class="url-text">{{ videoUrl }}</span>
@@ -50,11 +59,24 @@
           <div class="no-url" *ngIf="!videoUrl">
             <span>No hay video seleccionado</span>
           </div>
-          <button class="btn btn-change" (click)="showVideoInput()">
-            Cambiar Video / URL
-          </button>
+          
+          <!-- ✅ BOTONES: Solo visibles para el HOST -->
+          <div class="video-buttons" *ngIf="isHost()">
+            <button class="btn btn-upload" (click)="fileInput.click()">
+              📤 Subir Video
+            </button>
+            <button class="btn btn-change" (click)="showVideoInput()">
+              🔗 Pegar URL
+            </button>
+          </div>
+          
+          <!-- Mensaje para invitados -->
+          <div class="no-host-message" *ngIf="!isHost()">
+            <span>Solo el anfitrión puede cargar videos</span>
+          </div>
         </div>
 
+        <!-- Input para URL -->
         <div class="video-url-input" *ngIf="isChangingVideo">
           <input 
             type="text" 
