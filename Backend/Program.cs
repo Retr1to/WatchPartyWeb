@@ -102,12 +102,15 @@ app.Map("/ws/{roomId}", async (HttpContext context, string roomId) =>
 
     // ✅ Enviar estado actual del video al nuevo usuario
     var currentState = roomManager.GetVideoState(roomId);
-    if (currentState != null && !string.IsNullOrEmpty(currentState.VideoFileName))
+    if (currentState != null && (!string.IsNullOrEmpty(currentState.VideoFileName) || !string.IsNullOrEmpty(currentState.VideoUrl)))
     {
         await roomManager.SendToUser(roomId, userId, new WebSocketMessage
         {
             Type = "video_ready",
             VideoFileName = currentState.VideoFileName,
+            VideoUrl = currentState.VideoUrl,
+            Provider = currentState.Provider,
+            VideoId = currentState.VideoId,
             State = currentState,
             Message = $"Video disponible: {currentState.VideoFileName}"
         });
@@ -279,21 +282,94 @@ async Task ProcessMessage(string roomId, string userId, WebSocketMessage message
             }
 
             var seekState = roomManager.GetVideoState(roomId);
+            Console.WriteLine($"Seek state before: IsPlaying={seekState?.IsPlaying}, CurrentTime={seekState?.CurrentTime}");
             if (seekState != null)
             {
+                var oldTime = seekState.CurrentTime;
+                var incomingIsPlaying = message.IsPlaying ?? seekState.IsPlaying;
                 seekState.CurrentTime = message.Timestamp ?? 0;
+                seekState.IsPlaying = incomingIsPlaying;
                 roomManager.UpdateVideoState(roomId, seekState);
+                Console.WriteLine($"Seek state after update: IsPlaying={seekState.IsPlaying}, CurrentTime={seekState.CurrentTime}");
+
+                // Si estaba reproduciendo, enviar seek y luego play
+                if (seekState.IsPlaying)
+                {
+                    Console.WriteLine("Sending seek and play");
+                    // Enviar seek
+                    await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+                    {
+                        Type = "seek",
+                        Timestamp = message.Timestamp,
+                        IsPlaying = true,
+                        IsHost = true,
+                        UserId = userId
+                    });
+
+                    // Enviar play con el nuevo tiempo
+                    await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+                    {
+                        Type = "play",
+                        Timestamp = message.Timestamp,
+                        IsHost = true,
+                        UserId = userId
+                    });
+
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Sent seek-play sequence to room {roomId}: time={message.Timestamp}");
+                }
+                else
+                {
+                    Console.WriteLine("Sending only seek");
+                    // Si no estaba reproduciendo, solo enviar seek
+                    await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+                    {
+                        Type = "seek",
+                        Timestamp = message.Timestamp,
+                        IsPlaying = false,
+                        IsHost = true,
+                        UserId = userId
+                    });
+
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Sent seek to room {roomId}: time={message.Timestamp}, not playing");
+                }
             }
+
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] HOST {userId} SEEKED to {message.Timestamp}s");
+            break;
+
+        case "change_video":
+            if (!isHost)
+            {
+                Console.WriteLine($"User {userId} tried to CHANGE VIDEO but is not host");
+                return;
+            }
+
+            var newVideoUrl = message.VideoUrl ?? string.Empty;
+            var provider = string.IsNullOrWhiteSpace(message.Provider) ? "url" : message.Provider!;
+            var newVideoState = new VideoState
+            {
+                VideoFileName = string.Empty,
+                VideoUrl = newVideoUrl,
+                Provider = provider,
+                VideoId = message.VideoId,
+                CurrentTime = 0,
+                IsPlaying = false
+            };
+
+            roomManager.UpdateVideoState(roomId, newVideoState);
 
             await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
             {
-                Type = "seek",
-                Timestamp = message.Timestamp,
+                Type = "change_video",
+                VideoUrl = newVideoUrl,
+                Provider = provider,
+                VideoId = message.VideoId,
+                UserId = userId,
                 IsHost = true,
-                UserId = userId
+                State = newVideoState
             });
 
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] HOST {userId} SEEKED to {message.Timestamp}s");
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] HOST {userId} changed video URL to {newVideoUrl} (provider={provider}, videoId={message.VideoId})");
             break;
 
         case "sync_request":
@@ -305,6 +381,9 @@ async Task ProcessMessage(string roomId, string userId, WebSocketMessage message
                 {
                     Type = "video_ready",
                     VideoFileName = currentState.VideoFileName,
+                    VideoUrl = currentState.VideoUrl,
+                    Provider = currentState.Provider,
+                    VideoId = currentState.VideoId,
                     State = currentState
                 });
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Sent sync state to {userId}");
@@ -389,6 +468,9 @@ app.MapPost("/upload/{roomId}", async (HttpContext context, string roomId) =>
     var videoState = new VideoState
     {
         VideoFileName = fileName,
+        VideoUrl = null,
+        Provider = "file",
+        VideoId = null,
         CurrentTime = 0,
         IsPlaying = false
     };

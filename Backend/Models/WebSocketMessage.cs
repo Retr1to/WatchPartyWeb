@@ -1,4 +1,4 @@
-﻿namespace WatchPartyBackend.Models
+namespace WatchPartyBackend.Models
 {
     /// <summary>
     /// Representa los mensajes que se envían/reciben por WebSocket
@@ -31,6 +31,21 @@
         /// Nombre del video actual (opcional)
         /// </summary>
         public string? VideoFileName { get; set; }
+
+        /// <summary>
+        /// URL completa cuando el video proviene de un enlace
+        /// </summary>
+        public string? VideoUrl { get; set; }
+
+        /// <summary>
+        /// Proveedor o tipo de fuente (file, url, youtube)
+        /// </summary>
+        public string? Provider { get; set; }
+
+        /// <summary>
+        /// Identificador del video (p. ej. YouTube videoId)
+        /// </summary>
+        public string? VideoId { get; set; }
 
         /// <summary>
         /// Indica si el video está reproduciendo

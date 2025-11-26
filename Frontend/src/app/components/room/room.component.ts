@@ -1,9 +1,18 @@
-import { Component, OnInit, OnDestroy, ViewChild, ElementRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewInit } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SocketService, Room, Participant } from '../../services/socket.service';
 import { ToastService } from '../../services/toast.service';
+
+declare const YT: any;
+
+type VideoProvider = 'file' | 'url' | 'youtube';
+interface VideoSource {
+  url: string;
+  provider: VideoProvider;
+  videoId?: string | null;
+}
 
 @Component({
   selector: 'app-room',
@@ -12,8 +21,9 @@ import { ToastService } from '../../services/toast.service';
   templateUrl: './room.component.html',
   styleUrls: ['./room.component.css']
 })
-export class RoomComponent implements OnInit, OnDestroy {
+export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   @ViewChild('videoPlayer') videoPlayer!: ElementRef<HTMLVideoElement>;
+  @ViewChild('youtubePlayerContainer') youtubePlayerContainer!: ElementRef<HTMLDivElement>;
   
   roomCode: string = '';
   room: Room | null = null;
@@ -23,6 +33,13 @@ export class RoomComponent implements OnInit, OnDestroy {
   isChangingVideo: boolean = false;
   isSyncing: boolean = false;
   isConnected: boolean = false;
+  private lastKnownIsPlaying: boolean = false;
+  videoProvider: VideoProvider = 'file';
+  videoId: string | null = null;
+  private youtubePlayer: any = null;
+  private youtubeApiReady: Promise<void> | null = null;
+  private readonly allowedUrlExtensions = ['.mp4', '.webm', '.ogg', '.mov'];
+  private pendingVideoSource: { source: VideoSource; startTime: number; shouldPlay: boolean } | null = null;
 
   constructor(
     private route: ActivatedRoute,
@@ -41,10 +58,13 @@ export class RoomComponent implements OnInit, OnDestroy {
     if (state && state['room']) {
       console.log('[RoomComponent] Room data from router:', state['room']);
       this.room = state['room'];
-      if (this.room) {
-        this.videoUrl = this.room.videoState.url;
-        this.findCurrentUser();
+      if (this.room && this.room.videoState.url) {
+        this.applyVideoSource({
+          url: this.room.videoState.url,
+          provider: 'url'
+        }, this.room.videoState.currentTime, this.room.videoState.isPlaying);
       }
+      this.findCurrentUser();
     }
     
     this.setupSocketListeners();
@@ -58,6 +78,15 @@ export class RoomComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     console.log('[RoomComponent] Component destroyed, leaving room');
     this.socketService.leaveRoom();
+    this.destroyYouTubePlayer();
+  }
+
+  ngAfterViewInit(): void {
+    if (this.pendingVideoSource) {
+      const { source, startTime, shouldPlay } = this.pendingVideoSource;
+      this.pendingVideoSource = null;
+      this.applyVideoSource(source, startTime, shouldPlay);
+    }
   }
 
   private setupSocketListeners(): void {
@@ -65,18 +94,27 @@ export class RoomComponent implements OnInit, OnDestroy {
       console.log('[RoomComponent] Room created:', roomCode, room);
       this.room = room;
       this.roomCode = roomCode;
-      this.videoUrl = room.videoState.url;
+      if (room.videoState.url) {
+        this.applyVideoSource({
+          url: room.videoState.url,
+          provider: 'url'
+        }, room.videoState.currentTime, room.videoState.isPlaying);
+      }
       this.findCurrentUser();
     });
 
     this.socketService.onRoomJoined().subscribe(({ room }) => {
       console.log('[RoomComponent] Room joined:', room);
       this.room = room;
-      this.videoUrl = room.videoState.url;
+      if (room.videoState.url) {
+        this.applyVideoSource({
+          url: room.videoState.url,
+          provider: 'url'
+        }, room.videoState.currentTime, room.videoState.isPlaying);
+      }
       this.findCurrentUser();
     });
 
-    // ✅ Escuchar room_state para sincronizar lista completa de usuarios
     this.socketService.roomState$.subscribe(roomState => {
       console.log('[RoomComponent] Room state received:', roomState);
       
@@ -87,7 +125,6 @@ export class RoomComponent implements OnInit, OnDestroy {
           isHost: u.isHost
         }));
         
-        // ✅ Ordenar: anfitrión siempre primero
         this.room.participants.sort((a, b) => {
           if (a.isHost && !b.isHost) return -1;
           if (!a.isHost && b.isHost) return 1;
@@ -99,7 +136,6 @@ export class RoomComponent implements OnInit, OnDestroy {
       }
     });
 
-    // ✅ Verificar si el participante ya existe antes de agregarlo
     this.socketService.onParticipantJoined().subscribe(({ participant }) => {
       console.log('[RoomComponent] Participant joined:', participant);
       if (this.room) {
@@ -127,72 +163,56 @@ export class RoomComponent implements OnInit, OnDestroy {
       }
     });
 
-    this.socketService.onVideoChanged().subscribe(({ url }) => {
-      console.log('[RoomComponent] Video changed:', url);
-      this.videoUrl = url;
+    this.socketService.onVideoChanged().subscribe(({ url, provider, videoId }) => {
+      console.log('[RoomComponent] Video changed:', url, provider ?? '');
       this.newVideoUrl = '';
-      if (this.videoPlayer) {
-        this.videoPlayer.nativeElement.load();
-      }
+      this.applyVideoSource({
+        url,
+        provider: this.normalizeProvider(provider),
+        videoId: videoId || null
+      }, 0, false);
     });
 
-    // Escuchar cuando se sube un video
     this.socketService.onMessage().subscribe((message: any) => {
       if (message.type === 'video_uploaded') {
         console.log('[RoomComponent] Video uploaded notification:', message);
-        // Construir URL del video
-        this.videoUrl = `https://localhost:7186/videos/${this.roomCode}/${message.videoFileName}`;
-        console.log('[RoomComponent] Video URL set to:', this.videoUrl);
-        
-        // Recargar el video player
-        if (this.videoPlayer) {
-          this.videoPlayer.nativeElement.load();
-        }
-        
+        const url = `https://localhost:7186/videos/${this.roomCode}/${message.videoFileName}`;
+        this.applyVideoSource({
+          url,
+          provider: 'file'
+        }, 0, false);
         this.toastService.success(`Video cargado: ${message.videoFileName}`);
       } else if (message.type === 'video_ready') {
         console.log('[RoomComponent] Video ready notification:', message);
-        this.videoUrl = `https://localhost:7186/videos/${this.roomCode}/${message.videoFileName}`;
-        
-        if (this.videoPlayer && message.state) {
-          const video = this.videoPlayer.nativeElement;
-          video.currentTime = message.state.currentTime;
-          if (message.state.isPlaying) {
-            video.play();
-          }
-        }
+        const incomingUrl = message.videoUrl || message.state?.videoUrl || `https://localhost:7186/videos/${this.roomCode}/${message.videoFileName}`;
+        const provider = this.normalizeProvider(message.provider || message.state?.provider);
+        const videoId = message.videoId || message.state?.videoId || null;
+        const startTime = message.state?.currentTime || 0;
+        const shouldPlay = !!message.state?.isPlaying;
+        this.applyVideoSource({
+          url: incomingUrl,
+          provider,
+          videoId
+        }, startTime, shouldPlay);
       }
     });
 
     this.socketService.onVideoPlay().subscribe(({ currentTime }) => {
       console.log('[RoomComponent] Play event received, time:', currentTime);
-      if (this.videoPlayer && !this.isSyncing) {
-        const video = this.videoPlayer.nativeElement;
-        if (Math.abs(video.currentTime - currentTime) > 1) {
-          video.currentTime = currentTime;
-        }
-        video.play().catch(err => {
-          console.error('[RoomComponent] Play failed:', err);
-        });
-      }
+      this.lastKnownIsPlaying = true;
+      this.applyRemotePlay(currentTime);
     });
 
     this.socketService.onVideoPause().subscribe(({ currentTime }) => {
       console.log('[RoomComponent] Pause event received, time:', currentTime);
-      if (this.videoPlayer && !this.isSyncing) {
-        const video = this.videoPlayer.nativeElement;
-        if (Math.abs(video.currentTime - currentTime) > 1) {
-          video.currentTime = currentTime;
-        }
-        video.pause();
-      }
+      this.lastKnownIsPlaying = false;
+      this.applyRemotePause(currentTime);
     });
 
-    this.socketService.onVideoSeek().subscribe(({ currentTime }) => {
-      console.log('[RoomComponent] Seek event received, time:', currentTime);
-      if (this.videoPlayer && !this.isSyncing) {
-        this.videoPlayer.nativeElement.currentTime = currentTime;
-      }
+    this.socketService.onVideoSeek().subscribe(({ currentTime, isPlaying }) => {
+      console.log('[RoomComponent] Seek event received, time:', currentTime, 'playing:', isPlaying);
+      this.lastKnownIsPlaying = isPlaying;
+      this.applyRemoteSeek(currentTime, isPlaying);
     });
 
     this.socketService.onHostChanged().subscribe(({ newHostId }) => {
@@ -235,48 +255,66 @@ export class RoomComponent implements OnInit, OnDestroy {
       alert('Only the host can change the video');
       return;
     }
-    this.socketService.changeVideo(this.roomCode, this.newVideoUrl);
+    const source = this.parseVideoSource(this.newVideoUrl.trim());
+    if (!source) {
+      this.toastService.error('URL no soportada. Usa un enlace directo (.mp4, .webm, .ogg, .mov) o un enlace de YouTube.');
+      return;
+    }
+    this.applyVideoSource(source, 0, false);
+    this.socketService.changeVideo(this.roomCode, source.url, source.provider, source.videoId || undefined);
     this.isChangingVideo = false;
   }
 
   onPlay(): void {
+    if (this.videoProvider === 'youtube') return;
     if (!this.isHost()) {
       console.log('[RoomComponent] Not host, ignoring play');
       return;
     }
-    if (this.videoPlayer && !this.isSyncing) {
+    if (this.videoPlayer?.nativeElement && !this.isSyncing) {
       this.isSyncing = true;
       const currentTime = this.videoPlayer.nativeElement.currentTime;
       console.log('[RoomComponent] Sending play event, time:', currentTime);
       this.socketService.playVideo(this.roomCode, currentTime);
+      this.lastKnownIsPlaying = true;
       setTimeout(() => this.isSyncing = false, 200);
     }
   }
 
   onPause(): void {
+    if (this.videoProvider === 'youtube') return;
     if (!this.isHost()) {
       console.log('[RoomComponent] Not host, ignoring pause');
       return;
     }
-    if (this.videoPlayer && !this.isSyncing) {
+    if (this.videoPlayer?.nativeElement && !this.isSyncing) {
+      const video = this.videoPlayer.nativeElement;
+      if (video.seeking) {
+        console.log('[RoomComponent] Ignoring pause triggered by seeking');
+        return;
+      }
       this.isSyncing = true;
-      const currentTime = this.videoPlayer.nativeElement.currentTime;
+      const currentTime = video.currentTime;
       console.log('[RoomComponent] Sending pause event, time:', currentTime);
       this.socketService.pauseVideo(this.roomCode, currentTime);
+      this.lastKnownIsPlaying = false;
       setTimeout(() => this.isSyncing = false, 200);
     }
   }
 
   onSeeked(): void {
+    if (this.videoProvider === 'youtube') return;
     if (!this.isHost()) {
       console.log('[RoomComponent] Not host, ignoring seek');
       return;
     }
-    if (this.videoPlayer && !this.isSyncing) {
+    if (this.videoPlayer?.nativeElement && !this.isSyncing) {
       this.isSyncing = true;
-      const currentTime = this.videoPlayer.nativeElement.currentTime;
-      console.log('[RoomComponent] Sending seek event, time:', currentTime);
-      this.socketService.seekVideo(this.roomCode, currentTime);
+      const video = this.videoPlayer.nativeElement;
+      const currentTime = video.currentTime;
+      const isPlaying = this.lastKnownIsPlaying;
+      console.log('[RoomComponent] Sending seek event, time:', currentTime, 'playing:', isPlaying);
+      this.socketService.seekVideo(this.roomCode, currentTime, isPlaying);
       setTimeout(() => this.isSyncing = false, 200);
     }
   }
@@ -321,14 +359,12 @@ export class RoomComponent implements OnInit, OnDestroy {
   }
 
   private async uploadVideo(file: File): Promise<void> {
-    // ✅ Validar tipo de archivo
     const validTypes = ['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'];
     if (!validTypes.includes(file.type)) {
       alert('Tipo de archivo no válido. Usa MP4, WebM, OGG o MOV');
       return;
     }
     
-    // ✅ Validar tamaño (máximo 100 MB)
     const maxSize = 100 * 1024 * 1024;
     if (file.size > maxSize) {
       alert(`El archivo es muy grande (${(file.size / 1024 / 1024).toFixed(2)} MB). Máximo 100 MB`);
@@ -352,17 +388,280 @@ export class RoomComponent implements OnInit, OnDestroy {
       if (response.ok) {
         const result = await response.json();
         console.log('[RoomComponent] Video uploaded successfully:', result);
-        this.toastService.success(`✅ Video subido: ${result.fileName}`);
-        
-        // El WebSocket recibirá automáticamente el mensaje "video_uploaded"
+        this.toastService.success(`Video subido: ${result.fileName}`);
       } else {
         const error = await response.text();
         console.error('[RoomComponent] Upload failed:', response.status, error);
-        alert('❌ Error al subir: ' + error);
+        alert('⚠️ Error al subir: ' + error);
       }
     } catch (error) {
       console.error('[RoomComponent] Upload error:', error);
-      alert('❌ Error de red: ' + error);
+      alert('⚠️ Error de red: ' + error);
+    }
+  }
+
+  private parseVideoSource(url: string): VideoSource | null {
+    const ytId = this.extractYouTubeId(url);
+    if (ytId) {
+      return { url, provider: 'youtube', videoId: ytId };
+    }
+    if (this.isDirectVideoUrl(url)) {
+      return { url, provider: 'url', videoId: null };
+    }
+    return null;
+  }
+
+  private normalizeProvider(provider?: string): VideoProvider {
+    if (provider === 'youtube') return 'youtube';
+    if (provider === 'url' || provider === 'file') return provider;
+    return 'url';
+  }
+
+  private isDirectVideoUrl(url: string): boolean {
+    try {
+      const parsed = new URL(url);
+      const lowerPath = parsed.pathname.toLowerCase();
+      return this.allowedUrlExtensions.some(ext => lowerPath.endsWith(ext));
+    } catch {
+      return false;
+    }
+  }
+
+  private extractYouTubeId(url: string): string | null {
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname.includes('youtube.com')) {
+        const v = parsed.searchParams.get('v');
+        if (v) return v;
+        if (parsed.pathname.startsWith('/embed/')) {
+          const parts = parsed.pathname.split('/');
+          return parts[parts.length - 1] || null;
+        }
+      }
+      if (parsed.hostname === 'youtu.be') {
+        const id = parsed.pathname.replace('/', '');
+        return id || null;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  private async applyVideoSource(source: VideoSource, startTime: number, shouldPlay: boolean): Promise<void> {
+    this.videoProvider = source.provider;
+    this.videoId = source.videoId || null;
+    this.videoUrl = source.url;
+    this.lastKnownIsPlaying = shouldPlay;
+
+    if (source.provider === 'youtube') {
+      if (!this.youtubePlayerContainer) {
+        this.pendingVideoSource = { source, startTime, shouldPlay };
+        return;
+      }
+      this.pendingVideoSource = null;
+      await this.initYouTubePlayer(source.videoId || '', startTime, shouldPlay);
+      return;
+    }
+
+    this.pendingVideoSource = null;
+    if (!this.videoPlayer?.nativeElement) {
+      this.pendingVideoSource = { source, startTime, shouldPlay };
+      return;
+    }
+    this.destroyYouTubePlayer();
+    if (this.videoPlayer?.nativeElement) {
+      const video = this.videoPlayer.nativeElement;
+      video.src = this.videoUrl;
+      video.load();
+      if (Math.abs(video.currentTime - startTime) > 0.5) {
+        video.currentTime = startTime;
+      }
+      if (shouldPlay) {
+        video.play().catch(err => {
+          console.error('[RoomComponent] Play failed:', err);
+        });
+      } else {
+        video.pause();
+      }
+    }
+  }
+
+  private applyRemotePlay(currentTime: number): void {
+    if (this.isSyncing) return;
+
+    if (this.videoProvider === 'youtube' && this.youtubePlayer) {
+      this.isSyncing = true;
+      if (Math.abs(this.youtubePlayer.getCurrentTime() - currentTime) > 0.5) {
+        this.youtubePlayer.seekTo(currentTime, true);
+      }
+      this.youtubePlayer.playVideo();
+      setTimeout(() => this.isSyncing = false, 200);
+      return;
+    }
+
+    if (this.videoPlayer?.nativeElement && !this.isSyncing) {
+      const video = this.videoPlayer.nativeElement;
+      if (Math.abs(video.currentTime - currentTime) > 1) {
+        video.currentTime = currentTime;
+      }
+      video.play().catch(err => {
+        console.error('[RoomComponent] Play failed:', err);
+      });
+    }
+  }
+
+  private applyRemotePause(currentTime: number): void {
+    if (this.isSyncing) return;
+
+    if (this.videoProvider === 'youtube' && this.youtubePlayer) {
+      this.isSyncing = true;
+      if (Math.abs(this.youtubePlayer.getCurrentTime() - currentTime) > 0.5) {
+        this.youtubePlayer.seekTo(currentTime, true);
+      }
+      this.youtubePlayer.pauseVideo();
+      setTimeout(() => this.isSyncing = false, 200);
+      return;
+    }
+
+    if (this.videoPlayer?.nativeElement && !this.isSyncing) {
+      const video = this.videoPlayer.nativeElement;
+      if (Math.abs(video.currentTime - currentTime) > 1) {
+        video.currentTime = currentTime;
+      }
+      video.pause();
+    }
+  }
+
+  private applyRemoteSeek(currentTime: number, isPlaying: boolean): void {
+    if (this.isSyncing) return;
+
+    if (this.videoProvider === 'youtube' && this.youtubePlayer) {
+      this.isSyncing = true;
+      this.youtubePlayer.seekTo(currentTime, true);
+      if (isPlaying) {
+        this.youtubePlayer.playVideo();
+      } else {
+        this.youtubePlayer.pauseVideo();
+      }
+      setTimeout(() => this.isSyncing = false, 200);
+      return;
+    }
+
+    if (this.videoPlayer?.nativeElement && !this.isSyncing) {
+      const video = this.videoPlayer.nativeElement;
+      video.currentTime = currentTime;
+      if (isPlaying) {
+        video.play().catch(err => {
+          console.error('[RoomComponent] Play after seek failed:', err);
+        });
+      } else {
+        video.pause();
+      }
+    }
+  }
+
+  private loadYouTubeApi(): Promise<void> {
+    if (this.youtubeApiReady) {
+      return this.youtubeApiReady;
+    }
+
+    this.youtubeApiReady = new Promise<void>((resolve) => {
+      const win = window as any;
+      if (win.YT && win.YT.Player) {
+        resolve();
+        return;
+      }
+      const tag = document.createElement('script');
+      tag.src = 'https://www.youtube.com/iframe_api';
+      const firstScriptTag = document.getElementsByTagName('script')[0];
+      firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
+
+      (win as any).onYouTubeIframeAPIReady = () => {
+        resolve();
+      };
+    });
+
+    return this.youtubeApiReady;
+  }
+
+  private async initYouTubePlayer(videoId: string, startTime: number, shouldPlay: boolean): Promise<void> {
+    await this.loadYouTubeApi();
+    const container = this.youtubePlayerContainer?.nativeElement;
+    if (!container) {
+      console.warn('[RoomComponent] YouTube container not available');
+      return;
+    }
+
+    if (this.youtubePlayer) {
+      this.youtubePlayer.loadVideoById({ videoId, startSeconds: startTime });
+      if (shouldPlay) {
+        this.youtubePlayer.playVideo();
+      } else {
+        this.youtubePlayer.pauseVideo();
+      }
+      return;
+    }
+
+    this.youtubePlayer = new YT.Player(container, {
+      videoId,
+      width: '100%',
+      height: '100%',
+      playerVars: {
+        controls: this.isHost() ? 1 : 0,
+        disablekb: this.isHost() ? 0 : 1,
+        modestbranding: 1,
+        rel: 0,
+        enablejsapi: 1
+      },
+      events: {
+        onReady: () => {
+          this.youtubePlayer.seekTo(startTime, true);
+          if (shouldPlay) {
+            this.youtubePlayer.playVideo();
+          } else {
+            this.youtubePlayer.pauseVideo();
+          }
+        },
+        onStateChange: (event: any) => this.handleYouTubeStateChange(event)
+      }
+    });
+  }
+
+  private destroyYouTubePlayer(): void {
+    if (this.youtubePlayer) {
+      this.youtubePlayer.destroy();
+      this.youtubePlayer = null;
+    }
+  }
+
+  private handleYouTubeStateChange(event: any): void {
+    if (!this.isHost()) return;
+    if (this.isSyncing) return;
+    if (!this.youtubePlayer) return;
+
+    const currentTime = this.youtubePlayer.getCurrentTime ? this.youtubePlayer.getCurrentTime() : 0;
+
+    switch (event.data) {
+      case YT.PlayerState.PLAYING:
+        this.lastKnownIsPlaying = true;
+        this.isSyncing = true;
+        this.socketService.playVideo(this.roomCode, currentTime);
+        setTimeout(() => this.isSyncing = false, 200);
+        break;
+      case YT.PlayerState.PAUSED:
+        this.lastKnownIsPlaying = false;
+        this.isSyncing = true;
+        this.socketService.pauseVideo(this.roomCode, currentTime);
+        setTimeout(() => this.isSyncing = false, 200);
+        break;
+      case YT.PlayerState.BUFFERING:
+        this.isSyncing = true;
+        this.socketService.seekVideo(this.roomCode, currentTime, this.lastKnownIsPlaying);
+        setTimeout(() => this.isSyncing = false, 200);
+        break;
+      default:
+        break;
     }
   }
 }

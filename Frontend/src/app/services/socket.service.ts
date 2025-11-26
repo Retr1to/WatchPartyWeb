@@ -9,8 +9,11 @@ export interface Participant {
 
 export interface VideoState {
   videoFileName: string;
+  videoUrl?: string;
   currentTime: number;
   isPlaying: boolean;
+  provider?: string;
+  videoId?: string;
 }
 
 export interface Room {
@@ -21,6 +24,8 @@ export interface Room {
     url: string;
     currentTime: number;
     isPlaying: boolean;
+    provider?: string;
+    videoId?: string;
   };
 }
 
@@ -30,6 +35,9 @@ interface WebSocketMessage {
   userId?: string;
   isHost?: boolean;
   videoFileName?: string;
+  videoUrl?: string;
+  provider?: string;
+  videoId?: string;
   isPlaying?: boolean;
   message?: string;
   state?: VideoState;
@@ -51,10 +59,10 @@ export class SocketService {
   private roomErrorSubject = new Subject<{ message: string }>();
   private participantJoinedSubject = new Subject<{ participant: Participant; participants: Participant[] }>();
   private participantLeftSubject = new Subject<{ participantId: string; participants: Participant[] }>();
-  private videoChangedSubject = new Subject<{ url: string }>();
+  private videoChangedSubject = new Subject<{ url: string; provider?: string; videoId?: string }>();
   private videoPlaySubject = new Subject<{ currentTime: number }>();
   private videoPauseSubject = new Subject<{ currentTime: number }>();
-  private videoSeekSubject = new Subject<{ currentTime: number }>();
+  private videoSeekSubject = new Subject<{ currentTime: number; isPlaying: boolean }>();
   private hostChangedSubject = new Subject<{ newHostId: string }>();
   
   // Subject para room_state
@@ -126,7 +134,10 @@ export class SocketService {
       switch (message.type) {
         case 'state':
           if (message.state) {
-            this.videoChangedSubject.next({ url: message.state.videoFileName });
+            const newUrl = message.state.videoUrl || message.state.videoFileName;
+            if (newUrl) {
+              this.videoChangedSubject.next({ url: newUrl, provider: message.state.provider, videoId: message.state.videoId });
+            }
             if (message.state.isPlaying) {
               this.videoPlaySubject.next({ currentTime: message.state.currentTime });
             } else {
@@ -164,7 +175,13 @@ export class SocketService {
           break;
 
         case 'seek':
-          this.videoSeekSubject.next({ currentTime: message.timestamp || 0 });
+          this.videoSeekSubject.next({ currentTime: message.timestamp || 0, isPlaying: message.isPlaying || false });
+          break;
+
+        case 'change_video':
+          if (message.videoUrl) {
+            this.videoChangedSubject.next({ url: message.videoUrl, provider: message.provider, videoId: message.videoId });
+          }
           break;
 
         case 'video_uploaded':
@@ -284,8 +301,15 @@ export class SocketService {
     }
   }
 
-  changeVideo(roomCode: string, url: string): void {
-    this.videoChangedSubject.next({ url });
+  changeVideo(roomCode: string, url: string, provider?: string, videoId?: string): void {
+    // Emit locally for immediate feedback
+    this.videoChangedSubject.next({ url, provider, videoId });
+    this.sendMessage({
+      type: 'change_video',
+      videoUrl: url,
+      provider,
+      videoId
+    });
   }
 
   playVideo(roomCode: string, currentTime: number): void {
@@ -302,10 +326,11 @@ export class SocketService {
     });
   }
 
-  seekVideo(roomCode: string, currentTime: number): void {
+  seekVideo(roomCode: string, currentTime: number, isPlaying: boolean): void {
     this.sendMessage({
       type: 'seek',
-      timestamp: currentTime
+      timestamp: currentTime,
+      isPlaying
     });
   }
 
@@ -343,7 +368,7 @@ export class SocketService {
     return this.participantLeftSubject.asObservable();
   }
 
-  onVideoChanged(): Observable<{ url: string }> {
+  onVideoChanged(): Observable<{ url: string; provider?: string; videoId?: string }> {
     return this.videoChangedSubject.asObservable();
   }
 
@@ -355,7 +380,7 @@ export class SocketService {
     return this.videoPauseSubject.asObservable();
   }
 
-  onVideoSeek(): Observable<{ currentTime: number }> {
+  onVideoSeek(): Observable<{ currentTime: number; isPlaying: boolean }> {
     return this.videoSeekSubject.asObservable();
   }
 
