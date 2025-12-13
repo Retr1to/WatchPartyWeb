@@ -1,6 +1,7 @@
 ﻿using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.FileProviders;
 using WatchPartyBackend.Models;
 using WatchPartyBackend.Services;
 
@@ -36,7 +37,18 @@ builder.Services.AddCors(options =>
     });
 });
 
-var app = builder.Build();
+ // Ensure wwwroot exists (serves uploaded videos and avoids StaticFileMiddleware warnings).
+var webRootPath = Path.Combine(builder.Environment.ContentRootPath, "wwwroot");
+Directory.CreateDirectory(webRootPath);
+Directory.CreateDirectory(Path.Combine(webRootPath, "videos"));
+
+ var app = builder.Build();
+ 
+ var runtimeWebRootPath = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+ Directory.CreateDirectory(runtimeWebRootPath);
+ Directory.CreateDirectory(Path.Combine(runtimeWebRootPath, "videos"));
+ app.Environment.WebRootPath = runtimeWebRootPath;
+ app.Environment.WebRootFileProvider = new PhysicalFileProvider(runtimeWebRootPath);
 
 app.UseHttpsRedirection();
 app.UseStaticFiles(); // ✅ Sirve archivos de wwwroot/
@@ -563,7 +575,7 @@ app.MapPost("/upload/{roomId}", async (HttpContext context, string roomId) =>
     }
 
     // ✅ Crear directorio si no existe
-    var videosDir = Path.Combine("wwwroot", "videos", roomId);
+    var videosDir = Path.Combine(app.Environment.WebRootPath, "videos", roomId);
     Directory.CreateDirectory(videosDir);
 
     // ✅ Generar nombre único para evitar colisiones
@@ -621,7 +633,7 @@ app.MapGet("/videos/{roomId}", (string roomId) =>
         return Results.BadRequest(new { error = "Invalid room id" });
     }
 
-    var videosDir = Path.Combine("wwwroot", "videos", roomId);
+    var videosDir = Path.Combine(app.Environment.WebRootPath, "videos", roomId);
 
     if (!Directory.Exists(videosDir))
     {
