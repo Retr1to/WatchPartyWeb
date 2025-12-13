@@ -203,21 +203,38 @@ namespace WatchPartyBackend.Services
         /// <summary>
         /// Safely closes a WebSocket connection to prevent resource leaks
         /// </summary>
-        private async Task CloseWebSocketSafely(WebSocket socket)
+        private async Task CloseWebSocketSafely(WebSocket? socket)
         {
+            if (socket == null) return;
+            
             if (socket.State == WebSocketState.Open || socket.State == WebSocketState.CloseReceived)
             {
                 try
                 {
                     await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Connection replaced", CancellationToken.None);
                 }
-                catch
+                catch (OperationCanceledException)
                 {
-                    // Ignore exceptions during close - socket might already be in a bad state
+                    // Ignore cancellation exceptions
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Socket already disposed, nothing to do
+                }
+                catch (WebSocketException)
+                {
+                    // WebSocket is in a bad state, will dispose below
                 }
             }
 
-            socket.Dispose();
+            try
+            {
+                socket.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Socket already disposed, nothing to do
+            }
         }
     }
 }
