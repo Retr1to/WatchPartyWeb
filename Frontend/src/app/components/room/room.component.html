@@ -2,7 +2,7 @@
   <div class="room-header">
     <div class="room-info">
       <div class="room-code-display">
-        <span class="room-icon">📹</span>
+        <span class="room-icon">🎬</span>
         <span class="room-code">{{ roomCode }}</span>
         <button class="copy-btn" (click)="copyRoomCode()" title="Copiar código">
           📋
@@ -17,16 +17,27 @@
   <div class="room-content">
     <div class="video-section">
       <div class="video-container">
-        <video 
-          #videoPlayer
-          *ngIf="videoUrl"
-          [src]="videoUrl"
-          (play)="onPlay()"
-          (pause)="onPause()"
-          (seeked)="onSeeked()"
-          controls
-          controlsList="nodownload"
-        ></video>
+        <ng-container [ngSwitch]="videoProvider">
+          <ng-container *ngSwitchCase="'youtube'">
+            <div class="youtube-wrapper" *ngIf="videoUrl">
+              <div #youtubePlayerContainer class="youtube-player"></div>
+            </div>
+          </ng-container>
+          <ng-container *ngSwitchDefault>
+            <video 
+              #videoPlayer
+              *ngIf="videoUrl"
+              [src]="videoUrl"
+              (play)="onPlay()"
+              (pause)="onPause()"
+              (seeked)="onSeeked()"
+              (timeupdate)="onTimeUpdate()"
+              controls
+              controlsList="nodownload"
+              playsinline
+            ></video>
+          </ng-container>
+        </ng-container>
         
         <div class="video-placeholder" *ngIf="!videoUrl">
           <svg width="100" height="100" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -39,11 +50,10 @@
 
       <div class="video-source-section">
         <div class="section-header">
-          <span class="section-icon">🎬</span>
+          <span class="section-icon">🎥</span>
           <span>Fuente de Video</span>
         </div>
         
-        <!-- ✅ INPUT OCULTO PARA SELECCIONAR ARCHIVO -->
         <input 
           #fileInput 
           type="file" 
@@ -60,7 +70,6 @@
             <span>No hay video seleccionado</span>
           </div>
           
-          <!-- ✅ BOTONES: Solo visibles para el HOST -->
           <div class="video-buttons" *ngIf="isHost()">
             <button class="btn btn-upload" (click)="fileInput.click()">
               📤 Subir Video
@@ -70,18 +79,16 @@
             </button>
           </div>
           
-          <!-- Mensaje para invitados -->
           <div class="no-host-message" *ngIf="!isHost()">
             <span>Solo el anfitrión puede cargar videos</span>
           </div>
         </div>
 
-        <!-- Input para URL -->
         <div class="video-url-input" *ngIf="isChangingVideo">
           <input 
             type="text" 
             [(ngModel)]="newVideoUrl" 
-            placeholder="Ingresa la URL del video"
+            placeholder="Ingresa la URL del video (YouTube o enlace directo)"
             (keyup.enter)="changeVideo()"
           />
           <div class="input-buttons">

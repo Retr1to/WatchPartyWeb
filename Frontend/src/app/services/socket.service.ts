@@ -9,8 +9,11 @@ export interface Participant {
 
 export interface VideoState {
   videoFileName: string;
+  videoUrl?: string;
   currentTime: number;
   isPlaying: boolean;
+  provider?: string;
+  videoId?: string;
 }
 
 export interface Room {
@@ -21,6 +24,8 @@ export interface Room {
     url: string;
     currentTime: number;
     isPlaying: boolean;
+    provider?: string;
+    videoId?: string;
   };
 }
 
@@ -28,8 +33,12 @@ interface WebSocketMessage {
   type: string;
   timestamp?: number;
   userId?: string;
+  username?: string;
   isHost?: boolean;
   videoFileName?: string;
+  videoUrl?: string;
+  provider?: string;
+  videoId?: string;
   isPlaying?: boolean;
   message?: string;
   state?: VideoState;
@@ -40,10 +49,14 @@ interface WebSocketMessage {
 })
 export class SocketService {
   private ws: WebSocket | null = null;
-  private readonly SERVER_URL = 'wss://localhost:7186';
+  private readonly WS_BASE_URL = 'wss://localhost:7186';
   private currentRoomId: string = '';
   private currentUserId: string = '';
   private currentUsername: string = '';
+  private intentionallyClosed = false;
+  private shouldReconnect = false;
+  private reconnectAttempts = 0;
+  private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
   
   // Subjects para eventos
   private roomCreatedSubject = new Subject<{ roomCode: string; room: Room }>();
@@ -51,10 +64,10 @@ export class SocketService {
   private roomErrorSubject = new Subject<{ message: string }>();
   private participantJoinedSubject = new Subject<{ participant: Participant; participants: Participant[] }>();
   private participantLeftSubject = new Subject<{ participantId: string; participants: Participant[] }>();
-  private videoChangedSubject = new Subject<{ url: string }>();
+  private videoChangedSubject = new Subject<{ url: string; provider?: string; videoId?: string }>();
   private videoPlaySubject = new Subject<{ currentTime: number }>();
   private videoPauseSubject = new Subject<{ currentTime: number }>();
-  private videoSeekSubject = new Subject<{ currentTime: number }>();
+  private videoSeekSubject = new Subject<{ currentTime: number; isPlaying: boolean }>();
   private hostChangedSubject = new Subject<{ newHostId: string }>();
   
   // Subject para room_state
@@ -62,7 +75,7 @@ export class SocketService {
   public roomState$ = this.roomStateSubject.asObservable();
   
   // Subject para todos los mensajes (raw)
-  private messageSubject = new Subject<any>();
+  private messageSubject = new Subject<WebSocketMessage>();
   
   private connectionStateSubject = new BehaviorSubject<boolean>(false);
   public connectionState$ = this.connectionStateSubject.asObservable();
@@ -75,37 +88,82 @@ export class SocketService {
   // CONEXIÓN AL WEBSOCKET
   // ============================================================
   
-  private connect(roomId: string, userId: string, username: string): Promise<void> {
+  private connect(roomId: string, userId: string, username: string, isReconnectAttempt = false): Promise<void> {
     return new Promise((resolve, reject) => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (
+        this.ws &&
+        this.ws.readyState === WebSocket.OPEN &&
+        this.currentRoomId === roomId &&
+        this.currentUserId === userId
+      ) {
         console.log('[SocketService] Already connected');
         resolve();
         return;
       }
 
-      const wsUrl = `${this.SERVER_URL}/ws/${roomId}?userId=${userId}&username=${encodeURIComponent(username)}`;
+      if (!isReconnectAttempt) {
+        this.reconnectAttempts = 0;
+      }
+
+      if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+        try {
+          this.ws.close(1000, 'Switching rooms');
+        } catch {
+          // ignore
+        }
+      }
+
+      this.clearReconnectTimer();
+      this.intentionallyClosed = false;
+      this.shouldReconnect = true;
+
+      const wsUrl = `${this.WS_BASE_URL}/ws/${roomId}?userId=${userId}&username=${encodeURIComponent(username)}`;
       console.log('[SocketService] Connecting to:', wsUrl);
 
-      this.ws = new WebSocket(wsUrl);
+      const socket = new WebSocket(wsUrl);
+      this.ws = socket;
 
-      this.ws.onopen = () => {
+      let didOpen = false;
+      let settled = false;
+
+      socket.onopen = () => {
+        if (this.ws !== socket) return;
         console.log('[SocketService] WebSocket connected!');
+        this.reconnectAttempts = 0;
         this.connectionStateSubject.next(true);
+        didOpen = true;
+        if (settled) return;
+        settled = true;
         resolve();
       };
 
-      this.ws.onerror = (error) => {
+      socket.onerror = (error) => {
+        if (this.ws !== socket) return;
         console.error('[SocketService] WebSocket error:', error);
         this.connectionStateSubject.next(false);
-        reject(error);
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
       };
 
-      this.ws.onclose = () => {
-        console.log('[SocketService] WebSocket closed');
+      socket.onclose = (event) => {
+        if (this.ws !== socket) return;
+        console.log('[SocketService] WebSocket closed', { code: event.code, reason: event.reason });
         this.connectionStateSubject.next(false);
+
+        if (!didOpen && !settled && !this.intentionallyClosed) {
+          settled = true;
+          reject(new Error(`WebSocket closed before open (code=${event.code})`));
+        }
+
+        if (!this.intentionallyClosed && this.shouldReconnect) {
+          this.scheduleReconnect();
+        }
       };
 
-      this.ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (this.ws !== socket) return;
         this.handleMessage(event.data);
       };
     });
@@ -126,7 +184,10 @@ export class SocketService {
       switch (message.type) {
         case 'state':
           if (message.state) {
-            this.videoChangedSubject.next({ url: message.state.videoFileName });
+            const newUrl = message.state.videoUrl || message.state.videoFileName;
+            if (newUrl) {
+              this.videoChangedSubject.next({ url: newUrl, provider: message.state.provider, videoId: message.state.videoId });
+            }
             if (message.state.isPlaying) {
               this.videoPlaySubject.next({ currentTime: message.state.currentTime });
             } else {
@@ -164,7 +225,19 @@ export class SocketService {
           break;
 
         case 'seek':
-          this.videoSeekSubject.next({ currentTime: message.timestamp || 0 });
+          this.videoSeekSubject.next({ currentTime: message.timestamp ?? 0, isPlaying: message.isPlaying ?? false });
+          break;
+
+        case 'change_video':
+          if (message.videoUrl) {
+            this.videoChangedSubject.next({ url: message.videoUrl, provider: message.provider, videoId: message.videoId });
+          }
+          break;
+
+        case 'host_changed':
+          if (message.userId) {
+            this.hostChangedSubject.next({ newHostId: message.userId });
+          }
           break;
 
         case 'video_uploaded':
@@ -180,7 +253,7 @@ export class SocketService {
         case 'user_joined':
           const joinedParticipant: Participant = {
             id: message.userId || '',
-            username: (message as any).username || 'Usuario',
+            username: message.username || 'Usuario',
             isHost: message.isHost || false
           };
           this.participantJoinedSubject.next({ 
@@ -219,6 +292,38 @@ export class SocketService {
       this.ws.send(messageStr);
     } else {
       console.error('[SocketService] WebSocket not connected. Cannot send message.');
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimeoutId) return;
+    if (!this.currentRoomId || !this.currentUserId) return;
+    if (!this.shouldReconnect || this.intentionallyClosed) return;
+
+    const maxAttempts = 5;
+    if (this.reconnectAttempts >= maxAttempts) {
+      console.warn('[SocketService] Max reconnect attempts reached');
+      this.shouldReconnect = false;
+      this.roomErrorSubject.next({ message: 'Connection lost. Please refresh or rejoin the room.' });
+      return;
+    }
+
+    const delayMs = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 10000);
+    this.reconnectAttempts += 1;
+
+    console.log(`[SocketService] Reconnecting in ${delayMs}ms (attempt ${this.reconnectAttempts}/${maxAttempts})`);
+    this.reconnectTimeoutId = setTimeout(() => {
+      this.reconnectTimeoutId = null;
+      this.connect(this.currentRoomId, this.currentUserId, this.currentUsername, true).catch(() => {
+        // connect() will trigger onclose and reschedule if appropriate
+      });
+    }, delayMs);
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimeoutId) {
+      clearTimeout(this.reconnectTimeoutId);
+      this.reconnectTimeoutId = null;
     }
   }
 
@@ -284,8 +389,15 @@ export class SocketService {
     }
   }
 
-  changeVideo(roomCode: string, url: string): void {
-    this.videoChangedSubject.next({ url });
+  changeVideo(roomCode: string, url: string, provider?: string, videoId?: string): void {
+    // Emit locally for immediate feedback
+    this.videoChangedSubject.next({ url, provider, videoId });
+    this.sendMessage({
+      type: 'change_video',
+      videoUrl: url,
+      provider,
+      videoId
+    });
   }
 
   playVideo(roomCode: string, currentTime: number): void {
@@ -302,17 +414,26 @@ export class SocketService {
     });
   }
 
-  seekVideo(roomCode: string, currentTime: number): void {
+  seekVideo(roomCode: string, currentTime: number, isPlaying: boolean): void {
     this.sendMessage({
       type: 'seek',
-      timestamp: currentTime
+      timestamp: currentTime,
+      isPlaying
     });
   }
 
   leaveRoom(): void {
     if (this.ws) {
       console.log('[SocketService] Leaving room and closing connection');
-      this.ws.close();
+      this.intentionallyClosed = true;
+      this.shouldReconnect = false;
+      this.reconnectAttempts = 0;
+      this.clearReconnectTimer();
+      try {
+        this.ws.close(1000, 'Client leaving room');
+      } catch {
+        // ignore
+      }
       this.ws = null;
     }
     this.currentRoomId = '';
@@ -343,7 +464,7 @@ export class SocketService {
     return this.participantLeftSubject.asObservable();
   }
 
-  onVideoChanged(): Observable<{ url: string }> {
+  onVideoChanged(): Observable<{ url: string; provider?: string; videoId?: string }> {
     return this.videoChangedSubject.asObservable();
   }
 
@@ -355,7 +476,7 @@ export class SocketService {
     return this.videoPauseSubject.asObservable();
   }
 
-  onVideoSeek(): Observable<{ currentTime: number }> {
+  onVideoSeek(): Observable<{ currentTime: number; isPlaying: boolean }> {
     return this.videoSeekSubject.asObservable();
   }
 
@@ -364,7 +485,7 @@ export class SocketService {
   }
 
   // Observable para todos los mensajes raw
-  onMessage(): Observable<any> {
+  onMessage(): Observable<WebSocketMessage> {
     return this.messageSubject.asObservable();
   }
 
@@ -390,5 +511,9 @@ export class SocketService {
 
   getCurrentRoomId(): string {
     return this.currentRoomId;
+  }
+
+  getHttpBaseUrl(): string {
+    return this.WS_BASE_URL.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
   }
 }

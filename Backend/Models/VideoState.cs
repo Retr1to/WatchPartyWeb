@@ -11,6 +11,21 @@
         public string VideoFileName { get; set; } = string.Empty;
 
         /// <summary>
+        /// URL remota del video (cuando no es un archivo subido)
+        /// </summary>
+        public string? VideoUrl { get; set; }
+
+        /// <summary>
+        /// Proveedor o tipo de fuente (file, url, youtube)
+        /// </summary>
+        public string Provider { get; set; } = "file";
+
+        /// <summary>
+        /// Identificador del video (por ejemplo, YouTube videoId)
+        /// </summary>
+        public string? VideoId { get; set; }
+
+        /// <summary>
         /// Timestamp actual del video (en segundos)
         /// </summary>
         public double CurrentTime { get; set; } = 0;
