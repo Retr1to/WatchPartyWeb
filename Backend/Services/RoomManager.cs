@@ -34,9 +34,16 @@ namespace WatchPartyBackend.Services
         /// <summary>
         /// Agrega una conexión a una sala
         /// </summary>
-        public void AddConnection(string roomId, string userId, WebSocket webSocket, string username = "")
+        public async Task AddConnection(string roomId, string userId, WebSocket webSocket, string username = "")
         {
             var room = GetOrCreateRoom(roomId, userId);
+            
+            // Close old WebSocket connection if it exists to prevent resource leaks
+            if (room.Connections.TryGetValue(userId, out var oldSocket))
+            {
+                await CloseWebSocketSafely(oldSocket);
+            }
+            
             room.Connections.AddOrUpdate(userId, webSocket, (_, _) => webSocket);
 
             // ✅ Guardar username
@@ -191,6 +198,26 @@ namespace WatchPartyBackend.Services
             {
                 RemoveConnection(roomId, userId, socket);
             }
+        }
+
+        /// <summary>
+        /// Safely closes a WebSocket connection to prevent resource leaks
+        /// </summary>
+        private async Task CloseWebSocketSafely(WebSocket socket)
+        {
+            if (socket.State == WebSocketState.Open || socket.State == WebSocketState.CloseReceived)
+            {
+                try
+                {
+                    await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Connection replaced", CancellationToken.None);
+                }
+                catch
+                {
+                    // Ignore exceptions during close - socket might already be in a bad state
+                }
+            }
+
+            socket.Dispose();
         }
     }
 }

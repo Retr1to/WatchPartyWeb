@@ -123,7 +123,7 @@ app.Map("/ws/{roomId}", async (HttpContext context, string roomId) =>
     var webSocket = await context.WebSockets.AcceptWebSocketAsync();
 
     // Obtener o crear sala y agregar conexión
-    roomManager.AddConnection(roomId, userId, webSocket, username);
+    await roomManager.AddConnection(roomId, userId, webSocket, username);
 
     var isHost = roomManager.IsHost(roomId, userId);
 
