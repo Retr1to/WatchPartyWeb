@@ -380,7 +380,6 @@ async Task ProcessMessage(string roomId, string userId, WebSocketMessage message
             Console.WriteLine($"Seek state before: IsPlaying={seekState?.IsPlaying}, CurrentTime={seekState?.CurrentTime}");
             if (seekState != null)
             {
-                var oldTime = seekState.CurrentTime;
                 var incomingIsPlaying = message.IsPlaying ?? seekState.IsPlaying;
                 seekState.CurrentTime = message.Timestamp ?? 0;
                 seekState.IsPlaying = incomingIsPlaying;
