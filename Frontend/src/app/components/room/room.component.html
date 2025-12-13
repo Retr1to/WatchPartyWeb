@@ -31,8 +31,10 @@
               (play)="onPlay()"
               (pause)="onPause()"
               (seeked)="onSeeked()"
-              [attr.controls]="isHost() ? '' : null"
+              (timeupdate)="onTimeUpdate()"
+              controls
               controlsList="nodownload"
+              playsinline
             ></video>
           </ng-container>
         </ng-container>

@@ -62,16 +62,7 @@ app.MapGet("/", () => "WatchParty Backend is running!");
 static bool IsValidId(string value, int maxLength = 64)
 {
     if (string.IsNullOrWhiteSpace(value) || value.Length > maxLength) return false;
-
-    foreach (var ch in value)
-    {
-        if (!(char.IsLetterOrDigit(ch) || ch == '-' || ch == '_'))
-        {
-            return false;
-        }
-    }
-
-    return true;
+    return value.All(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_');
 }
 
 static string SanitizeUsername(string username)

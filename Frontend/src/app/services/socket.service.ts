@@ -88,7 +88,7 @@ export class SocketService {
   // CONEXIÓN AL WEBSOCKET
   // ============================================================
   
-  private connect(roomId: string, userId: string, username: string): Promise<void> {
+  private connect(roomId: string, userId: string, username: string, isReconnectAttempt = false): Promise<void> {
     return new Promise((resolve, reject) => {
       if (
         this.ws &&
@@ -101,6 +101,10 @@ export class SocketService {
         return;
       }
 
+      if (!isReconnectAttempt) {
+        this.reconnectAttempts = 0;
+      }
+
       if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
         try {
           this.ws.close(1000, 'Switching rooms');
@@ -111,35 +115,55 @@ export class SocketService {
 
       this.clearReconnectTimer();
       this.intentionallyClosed = false;
+      this.shouldReconnect = true;
 
       const wsUrl = `${this.WS_BASE_URL}/ws/${roomId}?userId=${userId}&username=${encodeURIComponent(username)}`;
       console.log('[SocketService] Connecting to:', wsUrl);
 
-      this.ws = new WebSocket(wsUrl);
+      const socket = new WebSocket(wsUrl);
+      this.ws = socket;
 
-      this.ws.onopen = () => {
+      let didOpen = false;
+      let settled = false;
+
+      socket.onopen = () => {
+        if (this.ws !== socket) return;
         console.log('[SocketService] WebSocket connected!');
         this.reconnectAttempts = 0;
-        this.shouldReconnect = true;
         this.connectionStateSubject.next(true);
+        didOpen = true;
+        if (settled) return;
+        settled = true;
         resolve();
       };
 
-      this.ws.onerror = (error) => {
+      socket.onerror = (error) => {
+        if (this.ws !== socket) return;
         console.error('[SocketService] WebSocket error:', error);
         this.connectionStateSubject.next(false);
-        reject(error);
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
       };
 
-      this.ws.onclose = () => {
-        console.log('[SocketService] WebSocket closed');
+      socket.onclose = (event) => {
+        if (this.ws !== socket) return;
+        console.log('[SocketService] WebSocket closed', { code: event.code, reason: event.reason });
         this.connectionStateSubject.next(false);
+
+        if (!didOpen && !settled && !this.intentionallyClosed) {
+          settled = true;
+          reject(new Error(`WebSocket closed before open (code=${event.code})`));
+        }
+
         if (!this.intentionallyClosed && this.shouldReconnect) {
           this.scheduleReconnect();
         }
       };
 
-      this.ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (this.ws !== socket) return;
         this.handleMessage(event.data);
       };
     });
@@ -274,10 +298,13 @@ export class SocketService {
   private scheduleReconnect(): void {
     if (this.reconnectTimeoutId) return;
     if (!this.currentRoomId || !this.currentUserId) return;
+    if (!this.shouldReconnect || this.intentionallyClosed) return;
 
     const maxAttempts = 5;
     if (this.reconnectAttempts >= maxAttempts) {
       console.warn('[SocketService] Max reconnect attempts reached');
+      this.shouldReconnect = false;
+      this.roomErrorSubject.next({ message: 'Connection lost. Please refresh or rejoin the room.' });
       return;
     }
 
@@ -287,7 +314,7 @@ export class SocketService {
     console.log(`[SocketService] Reconnecting in ${delayMs}ms (attempt ${this.reconnectAttempts}/${maxAttempts})`);
     this.reconnectTimeoutId = setTimeout(() => {
       this.reconnectTimeoutId = null;
-      this.connect(this.currentRoomId, this.currentUserId, this.currentUsername).catch(() => {
+      this.connect(this.currentRoomId, this.currentUserId, this.currentUsername, true).catch(() => {
         // connect() will trigger onclose and reschedule if appropriate
       });
     }, delayMs);
@@ -400,6 +427,7 @@ export class SocketService {
       console.log('[SocketService] Leaving room and closing connection');
       this.intentionallyClosed = true;
       this.shouldReconnect = false;
+      this.reconnectAttempts = 0;
       this.clearReconnectTimer();
       try {
         this.ws.close(1000, 'Client leaving room');

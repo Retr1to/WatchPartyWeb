@@ -41,8 +41,12 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   videoId: string | null = null;
   private youtubePlayer: any = null;
   private youtubeApiReady: Promise<void> | null = null;
+  private youtubeTimePollId: number | null = null;
+  private lastAllowedYouTubeTime = 0;
   private readonly allowedUrlExtensions = ['.mp4', '.webm', '.ogg', '.mov'];
   private pendingVideoSource: { source: VideoSource; startTime: number; shouldPlay: boolean } | null = null;
+  private lastAllowedVideoTime = 0;
+  private lastViewerWarningAt = 0;
 
   constructor(
     private route: ActivatedRoute,
@@ -271,7 +275,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   onPlay(): void {
     if (this.videoProvider === 'youtube') return;
     if (!this.isHost()) {
-      console.log('[RoomComponent] Not host, ignoring play');
+      this.handleViewerPlaybackAttempt('play');
       return;
     }
     if (this.videoPlayer?.nativeElement && !this.isSyncing) {
@@ -287,7 +291,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   onPause(): void {
     if (this.videoProvider === 'youtube') return;
     if (!this.isHost()) {
-      console.log('[RoomComponent] Not host, ignoring pause');
+      this.handleViewerPlaybackAttempt('pause');
       return;
     }
     if (this.videoPlayer?.nativeElement && !this.isSyncing) {
@@ -308,7 +312,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   onSeeked(): void {
     if (this.videoProvider === 'youtube') return;
     if (!this.isHost()) {
-      console.log('[RoomComponent] Not host, ignoring seek');
+      this.handleViewerPlaybackAttempt('seek');
       return;
     }
     if (this.videoPlayer?.nativeElement && !this.isSyncing) {
@@ -320,6 +324,15 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       this.socketService.seekVideo(this.roomCode, currentTime, isPlaying);
       setTimeout(() => this.isSyncing = false, 200);
     }
+  }
+
+  onTimeUpdate(): void {
+    if (this.videoProvider === 'youtube') return;
+    const video = this.videoPlayer?.nativeElement;
+    if (!video) return;
+    if (this.isSyncing) return;
+    if (video.seeking) return;
+    this.lastAllowedVideoTime = video.currentTime;
   }
 
   isHost(): boolean {
@@ -440,10 +453,15 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
           const parts = parsed.pathname.split('/');
           return parts[parts.length - 1] || null;
         }
+        if (parsed.pathname.startsWith('/shorts/')) {
+          const parts = parsed.pathname.split('/').filter(Boolean);
+          return parts[1] || null;
+        }
       }
       if (parsed.hostname === 'youtu.be') {
-        const id = parsed.pathname.replace('/', '');
-        return id || null;
+        const parts = parsed.pathname.split('/').filter(Boolean);
+        const id = parts[0] || null;
+        return id;
       }
     } catch {
       return null;
@@ -456,6 +474,8 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     this.videoId = source.videoId || null;
     this.videoUrl = source.url;
     this.lastKnownIsPlaying = shouldPlay;
+    this.lastAllowedVideoTime = startTime;
+    this.lastAllowedYouTubeTime = startTime;
 
     if (source.provider === 'youtube') {
       if (!this.youtubePlayerContainer) {
@@ -499,6 +519,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
         this.youtubePlayer.seekTo(currentTime, true);
       }
       this.youtubePlayer.playVideo();
+      this.lastAllowedYouTubeTime = currentTime;
       setTimeout(() => this.isSyncing = false, 200);
       return;
     }
@@ -511,6 +532,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       video.play().catch(err => {
         console.error('[RoomComponent] Play failed:', err);
       });
+      this.lastAllowedVideoTime = currentTime;
     }
   }
 
@@ -523,6 +545,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
         this.youtubePlayer.seekTo(currentTime, true);
       }
       this.youtubePlayer.pauseVideo();
+      this.lastAllowedYouTubeTime = currentTime;
       setTimeout(() => this.isSyncing = false, 200);
       return;
     }
@@ -533,6 +556,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
         video.currentTime = currentTime;
       }
       video.pause();
+      this.lastAllowedVideoTime = currentTime;
     }
   }
 
@@ -547,6 +571,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       } else {
         this.youtubePlayer.pauseVideo();
       }
+      this.lastAllowedYouTubeTime = currentTime;
       setTimeout(() => this.isSyncing = false, 200);
       return;
     }
@@ -561,6 +586,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       } else {
         video.pause();
       }
+      this.lastAllowedVideoTime = currentTime;
     }
   }
 
@@ -611,8 +637,8 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       width: '100%',
       height: '100%',
       playerVars: {
-        controls: this.isHost() ? 1 : 0,
-        disablekb: this.isHost() ? 0 : 1,
+        controls: 1,
+        disablekb: 0,
         modestbranding: 1,
         rel: 0,
         enablejsapi: 1
@@ -625,6 +651,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
           } else {
             this.youtubePlayer.pauseVideo();
           }
+          this.startYouTubeTimePolling();
         },
         onStateChange: (event: any) => this.handleYouTubeStateChange(event)
       }
@@ -633,17 +660,105 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
 
   private destroyYouTubePlayer(): void {
     if (this.youtubePlayer) {
+      this.stopYouTubeTimePolling();
       this.youtubePlayer.destroy();
       this.youtubePlayer = null;
     }
   }
 
+  private startYouTubeTimePolling(): void {
+    this.stopYouTubeTimePolling();
+    this.youtubeTimePollId = window.setInterval(() => {
+      if (!this.youtubePlayer) return;
+      if (this.isSyncing) return;
+      if (!this.youtubePlayer.getCurrentTime) return;
+      const t = this.youtubePlayer.getCurrentTime();
+      if (typeof t === 'number' && !Number.isNaN(t)) {
+        this.lastAllowedYouTubeTime = t;
+      }
+    }, 500);
+  }
+
+  private stopYouTubeTimePolling(): void {
+    if (this.youtubeTimePollId != null) {
+      clearInterval(this.youtubeTimePollId);
+      this.youtubeTimePollId = null;
+    }
+  }
+
+  private handleViewerPlaybackAttempt(action: 'play' | 'pause' | 'seek'): void {
+    const now = Date.now();
+    if (now - this.lastViewerWarningAt > 2500) {
+      this.lastViewerWarningAt = now;
+      this.toastService.info('Puedes ajustar volumen/subtítulos, pero solo el anfitrión controla la reproducción.');
+    }
+
+    if (this.isSyncing) return;
+
+    if (this.videoProvider === 'youtube') {
+      if (!this.youtubePlayer) return;
+      this.isSyncing = true;
+
+      const shouldPlay = this.lastKnownIsPlaying;
+      const restoreTime = this.lastAllowedYouTubeTime;
+      try {
+        if (action === 'seek' && Math.abs(this.youtubePlayer.getCurrentTime() - restoreTime) > 1) {
+          this.youtubePlayer.seekTo(restoreTime, true);
+        }
+        if (shouldPlay) {
+          this.youtubePlayer.playVideo();
+        } else {
+          this.youtubePlayer.pauseVideo();
+        }
+      } finally {
+        setTimeout(() => (this.isSyncing = false), 200);
+      }
+      return;
+    }
+
+    const video = this.videoPlayer?.nativeElement;
+    if (!video) return;
+
+    this.isSyncing = true;
+    const shouldPlay = this.lastKnownIsPlaying;
+    const restoreTime = this.lastAllowedVideoTime;
+
+    if (action === 'seek' && Math.abs(video.currentTime - restoreTime) > 0.5) {
+      video.currentTime = restoreTime;
+    }
+
+    if (shouldPlay) {
+      video.play().catch(() => {
+        // ignore
+      });
+    } else {
+      video.pause();
+    }
+
+    setTimeout(() => (this.isSyncing = false), 200);
+  }
+
   private handleYouTubeStateChange(event: any): void {
-    if (!this.isHost()) return;
     if (this.isSyncing) return;
     if (!this.youtubePlayer) return;
 
     const currentTime = this.youtubePlayer.getCurrentTime ? this.youtubePlayer.getCurrentTime() : 0;
+
+    if (!this.isHost()) {
+      const state = event?.data;
+      if (state === YT.PlayerState.PLAYING && !this.lastKnownIsPlaying) {
+        this.handleViewerPlaybackAttempt('play');
+      } else if (state === YT.PlayerState.PAUSED && this.lastKnownIsPlaying) {
+        this.handleViewerPlaybackAttempt('pause');
+      } else if (
+        state === YT.PlayerState.BUFFERING &&
+        typeof currentTime === 'number' &&
+        Math.abs(currentTime - this.lastAllowedYouTubeTime) > 1.5
+      ) {
+        this.handleViewerPlaybackAttempt('seek');
+      }
+      return;
+    }
 
     switch (event.data) {
       case YT.PlayerState.PLAYING:
