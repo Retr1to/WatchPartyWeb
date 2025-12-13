@@ -37,23 +37,39 @@ namespace WatchPartyBackend.Services
         public void AddConnection(string roomId, string userId, WebSocket webSocket, string username = "")
         {
             var room = GetOrCreateRoom(roomId, userId);
-            room.Connections.TryAdd(userId, webSocket);
+            room.Connections.AddOrUpdate(userId, webSocket, (_, _) => webSocket);
 
             // ✅ Guardar username
             if (!string.IsNullOrEmpty(username))
             {
-                room.Usernames.TryAdd(userId, username);
+                room.Usernames.AddOrUpdate(userId, username, (_, _) => username);
             }
         }
 
         /// <summary>
         /// Remueve una conexión de una sala
         /// </summary>
-        public void RemoveConnection(string roomId, string userId)
+        public bool RemoveConnection(string roomId, string userId, WebSocket? webSocket = null)
         {
             if (_rooms.TryGetValue(roomId, out var room))
             {
-                room.Connections.TryRemove(userId, out _);
+                if (webSocket != null)
+                {
+                    if (!room.Connections.TryGetValue(userId, out var currentSocket))
+                    {
+                        return false;
+                    }
+
+                    if (!ReferenceEquals(currentSocket, webSocket))
+                    {
+                        return false;
+                    }
+                }
+
+                if (!room.Connections.TryRemove(userId, out _))
+                {
+                    return false;
+                }
                 room.Usernames.TryRemove(userId, out _);
 
                 // Si la sala queda vacía, eliminarla
@@ -61,7 +77,24 @@ namespace WatchPartyBackend.Services
                 {
                     _rooms.TryRemove(roomId, out _);
                 }
+
+                return true;
             }
+
+            return false;
+        }
+
+        public bool TryReassignHost(string roomId, out string newHostId)
+        {
+            newHostId = string.Empty;
+            if (!_rooms.TryGetValue(roomId, out var room)) return false;
+
+            var candidate = room.Connections.Keys.FirstOrDefault();
+            if (string.IsNullOrEmpty(candidate) || candidate == room.HostId) return false;
+
+            room.HostId = candidate;
+            newHostId = candidate;
+            return true;
         }
 
         /// <summary>
@@ -114,6 +147,7 @@ namespace WatchPartyBackend.Services
 
             var messageJson = JsonSerializer.Serialize(message, _jsonOptions);
             var messageBytes = Encoding.UTF8.GetBytes(messageJson);
+            var payload = new ArraySegment<byte>(messageBytes);
 
             var tasks = new List<Task>();
 
@@ -122,15 +156,7 @@ namespace WatchPartyBackend.Services
                 // No enviar al usuario excluido (por ejemplo, el que originó el mensaje)
                 if (userId == excludeUserId) continue;
 
-                if (socket.State == WebSocketState.Open)
-                {
-                    tasks.Add(socket.SendAsync(
-                        new ArraySegment<byte>(messageBytes),
-                        WebSocketMessageType.Text,
-                        true,
-                        CancellationToken.None
-                    ));
-                }
+                tasks.Add(TrySendAsync(roomId, userId, socket, payload));
             }
 
             await Task.WhenAll(tasks);
@@ -144,17 +170,26 @@ namespace WatchPartyBackend.Services
             if (!_rooms.TryGetValue(roomId, out var room)) return;
             if (!room.Connections.TryGetValue(userId, out var socket)) return;
 
-            if (socket.State == WebSocketState.Open)
-            {
-                var messageJson = JsonSerializer.Serialize(message, _jsonOptions);
-                var messageBytes = Encoding.UTF8.GetBytes(messageJson);
+            var messageJson = JsonSerializer.Serialize(message, _jsonOptions);
+            var messageBytes = Encoding.UTF8.GetBytes(messageJson);
+            await TrySendAsync(roomId, userId, socket, new ArraySegment<byte>(messageBytes));
+        }
 
-                await socket.SendAsync(
-                    new ArraySegment<byte>(messageBytes),
-                    WebSocketMessageType.Text,
-                    true,
-                    CancellationToken.None
-                );
+        private async Task TrySendAsync(string roomId, string userId, WebSocket socket, ArraySegment<byte> payload)
+        {
+            if (socket.State != WebSocketState.Open)
+            {
+                RemoveConnection(roomId, userId, socket);
+                return;
+            }
+
+            try
+            {
+                await socket.SendAsync(payload, WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+            catch
+            {
+                RemoveConnection(roomId, userId, socket);
             }
         }
     }

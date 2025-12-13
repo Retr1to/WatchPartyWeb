@@ -1,9 +1,10 @@
-import { Component, OnInit, OnDestroy, ViewChild, ElementRef, AfterViewInit } from '@angular/core';
+import { AfterViewInit, Component, DestroyRef, ElementRef, OnDestroy, OnInit, ViewChild, inject } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SocketService, Room, Participant } from '../../services/socket.service';
 import { ToastService } from '../../services/toast.service';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 declare const YT: any;
 
@@ -22,6 +23,8 @@ interface VideoSource {
   styleUrls: ['./room.component.css']
 })
 export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
+  private readonly destroyRef = inject(DestroyRef);
+
   @ViewChild('videoPlayer') videoPlayer!: ElementRef<HTMLVideoElement>;
   @ViewChild('youtubePlayerContainer') youtubePlayerContainer!: ElementRef<HTMLDivElement>;
   
@@ -69,7 +72,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     
     this.setupSocketListeners();
 
-    this.socketService.connectionState$.subscribe(connected => {
+    this.socketService.connectionState$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(connected => {
       this.isConnected = connected;
       console.log('[RoomComponent] Connection state:', connected);
     });
@@ -90,7 +93,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   private setupSocketListeners(): void {
-    this.socketService.onRoomCreated().subscribe(({ roomCode, room }) => {
+    this.socketService.onRoomCreated().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ roomCode, room }) => {
       console.log('[RoomComponent] Room created:', roomCode, room);
       this.room = room;
       this.roomCode = roomCode;
@@ -103,7 +106,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       this.findCurrentUser();
     });
 
-    this.socketService.onRoomJoined().subscribe(({ room }) => {
+    this.socketService.onRoomJoined().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ room }) => {
       console.log('[RoomComponent] Room joined:', room);
       this.room = room;
       if (room.videoState.url) {
@@ -115,7 +118,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       this.findCurrentUser();
     });
 
-    this.socketService.roomState$.subscribe(roomState => {
+    this.socketService.roomState$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(roomState => {
       console.log('[RoomComponent] Room state received:', roomState);
       
       if (this.room) {
@@ -136,7 +139,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       }
     });
 
-    this.socketService.onParticipantJoined().subscribe(({ participant }) => {
+    this.socketService.onParticipantJoined().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ participant }) => {
       console.log('[RoomComponent] Participant joined:', participant);
       if (this.room) {
         const exists = this.room.participants.find(p => p.id === participant.id);
@@ -156,14 +159,14 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       }
     });
 
-    this.socketService.onParticipantLeft().subscribe(({ participantId }) => {
+    this.socketService.onParticipantLeft().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ participantId }) => {
       console.log('[RoomComponent] Participant left:', participantId);
       if (this.room) {
         this.room.participants = this.room.participants.filter(p => p.id !== participantId);
       }
     });
 
-    this.socketService.onVideoChanged().subscribe(({ url, provider, videoId }) => {
+    this.socketService.onVideoChanged().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ url, provider, videoId }) => {
       console.log('[RoomComponent] Video changed:', url, provider ?? '');
       this.newVideoUrl = '';
       this.applyVideoSource({
@@ -173,10 +176,10 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       }, 0, false);
     });
 
-    this.socketService.onMessage().subscribe((message: any) => {
+    this.socketService.onMessage().pipe(takeUntilDestroyed(this.destroyRef)).subscribe((message: any) => {
       if (message.type === 'video_uploaded') {
         console.log('[RoomComponent] Video uploaded notification:', message);
-        const url = `https://localhost:7186/videos/${this.roomCode}/${message.videoFileName}`;
+        const url = `${this.socketService.getHttpBaseUrl()}/videos/${this.roomCode}/${message.videoFileName}`;
         this.applyVideoSource({
           url,
           provider: 'file'
@@ -184,7 +187,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
         this.toastService.success(`Video cargado: ${message.videoFileName}`);
       } else if (message.type === 'video_ready') {
         console.log('[RoomComponent] Video ready notification:', message);
-        const incomingUrl = message.videoUrl || message.state?.videoUrl || `https://localhost:7186/videos/${this.roomCode}/${message.videoFileName}`;
+        const incomingUrl = message.videoUrl || message.state?.videoUrl || `${this.socketService.getHttpBaseUrl()}/videos/${this.roomCode}/${message.videoFileName}`;
         const provider = this.normalizeProvider(message.provider || message.state?.provider);
         const videoId = message.videoId || message.state?.videoId || null;
         const startTime = message.state?.currentTime || 0;
@@ -197,25 +200,25 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       }
     });
 
-    this.socketService.onVideoPlay().subscribe(({ currentTime }) => {
+    this.socketService.onVideoPlay().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ currentTime }) => {
       console.log('[RoomComponent] Play event received, time:', currentTime);
       this.lastKnownIsPlaying = true;
       this.applyRemotePlay(currentTime);
     });
 
-    this.socketService.onVideoPause().subscribe(({ currentTime }) => {
+    this.socketService.onVideoPause().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ currentTime }) => {
       console.log('[RoomComponent] Pause event received, time:', currentTime);
       this.lastKnownIsPlaying = false;
       this.applyRemotePause(currentTime);
     });
 
-    this.socketService.onVideoSeek().subscribe(({ currentTime, isPlaying }) => {
+    this.socketService.onVideoSeek().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ currentTime, isPlaying }) => {
       console.log('[RoomComponent] Seek event received, time:', currentTime, 'playing:', isPlaying);
       this.lastKnownIsPlaying = isPlaying;
       this.applyRemoteSeek(currentTime, isPlaying);
     });
 
-    this.socketService.onHostChanged().subscribe(({ newHostId }) => {
+    this.socketService.onHostChanged().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ newHostId }) => {
       console.log('[RoomComponent] Host changed to:', newHostId);
       if (this.room) {
         this.room.participants.forEach(p => {
@@ -229,7 +232,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       }
     });
 
-    this.socketService.onRoomError().subscribe(({ message }) => {
+    this.socketService.onRoomError().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ message }) => {
       console.error('[RoomComponent] Room error:', message);
       alert('Error: ' + message);
       this.router.navigate(['/']);
@@ -377,7 +380,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     try {
       console.log('[RoomComponent] Uploading video:', file.name, `(${(file.size / 1024 / 1024).toFixed(2)} MB)`);
       
-      const response = await fetch(`https://localhost:7186/upload/${this.roomCode}`, {
+      const response = await fetch(`${this.socketService.getHttpBaseUrl()}/upload/${this.roomCode}`, {
         method: 'POST',
         headers: {
           'X-User-Id': this.currentUser?.id || ''

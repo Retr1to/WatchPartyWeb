@@ -33,6 +33,7 @@ interface WebSocketMessage {
   type: string;
   timestamp?: number;
   userId?: string;
+  username?: string;
   isHost?: boolean;
   videoFileName?: string;
   videoUrl?: string;
@@ -48,10 +49,14 @@ interface WebSocketMessage {
 })
 export class SocketService {
   private ws: WebSocket | null = null;
-  private readonly SERVER_URL = 'wss://localhost:7186';
+  private readonly WS_BASE_URL = 'wss://localhost:7186';
   private currentRoomId: string = '';
   private currentUserId: string = '';
   private currentUsername: string = '';
+  private intentionallyClosed = false;
+  private shouldReconnect = false;
+  private reconnectAttempts = 0;
+  private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
   
   // Subjects para eventos
   private roomCreatedSubject = new Subject<{ roomCode: string; room: Room }>();
@@ -70,7 +75,7 @@ export class SocketService {
   public roomState$ = this.roomStateSubject.asObservable();
   
   // Subject para todos los mensajes (raw)
-  private messageSubject = new Subject<any>();
+  private messageSubject = new Subject<WebSocketMessage>();
   
   private connectionStateSubject = new BehaviorSubject<boolean>(false);
   public connectionState$ = this.connectionStateSubject.asObservable();
@@ -85,19 +90,37 @@ export class SocketService {
   
   private connect(roomId: string, userId: string, username: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (
+        this.ws &&
+        this.ws.readyState === WebSocket.OPEN &&
+        this.currentRoomId === roomId &&
+        this.currentUserId === userId
+      ) {
         console.log('[SocketService] Already connected');
         resolve();
         return;
       }
 
-      const wsUrl = `${this.SERVER_URL}/ws/${roomId}?userId=${userId}&username=${encodeURIComponent(username)}`;
+      if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+        try {
+          this.ws.close(1000, 'Switching rooms');
+        } catch {
+          // ignore
+        }
+      }
+
+      this.clearReconnectTimer();
+      this.intentionallyClosed = false;
+
+      const wsUrl = `${this.WS_BASE_URL}/ws/${roomId}?userId=${userId}&username=${encodeURIComponent(username)}`;
       console.log('[SocketService] Connecting to:', wsUrl);
 
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
         console.log('[SocketService] WebSocket connected!');
+        this.reconnectAttempts = 0;
+        this.shouldReconnect = true;
         this.connectionStateSubject.next(true);
         resolve();
       };
@@ -111,6 +134,9 @@ export class SocketService {
       this.ws.onclose = () => {
         console.log('[SocketService] WebSocket closed');
         this.connectionStateSubject.next(false);
+        if (!this.intentionallyClosed && this.shouldReconnect) {
+          this.scheduleReconnect();
+        }
       };
 
       this.ws.onmessage = (event) => {
@@ -175,12 +201,18 @@ export class SocketService {
           break;
 
         case 'seek':
-          this.videoSeekSubject.next({ currentTime: message.timestamp || 0, isPlaying: message.isPlaying || false });
+          this.videoSeekSubject.next({ currentTime: message.timestamp ?? 0, isPlaying: message.isPlaying ?? false });
           break;
 
         case 'change_video':
           if (message.videoUrl) {
             this.videoChangedSubject.next({ url: message.videoUrl, provider: message.provider, videoId: message.videoId });
+          }
+          break;
+
+        case 'host_changed':
+          if (message.userId) {
+            this.hostChangedSubject.next({ newHostId: message.userId });
           }
           break;
 
@@ -197,7 +229,7 @@ export class SocketService {
         case 'user_joined':
           const joinedParticipant: Participant = {
             id: message.userId || '',
-            username: (message as any).username || 'Usuario',
+            username: message.username || 'Usuario',
             isHost: message.isHost || false
           };
           this.participantJoinedSubject.next({ 
@@ -236,6 +268,35 @@ export class SocketService {
       this.ws.send(messageStr);
     } else {
       console.error('[SocketService] WebSocket not connected. Cannot send message.');
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimeoutId) return;
+    if (!this.currentRoomId || !this.currentUserId) return;
+
+    const maxAttempts = 5;
+    if (this.reconnectAttempts >= maxAttempts) {
+      console.warn('[SocketService] Max reconnect attempts reached');
+      return;
+    }
+
+    const delayMs = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 10000);
+    this.reconnectAttempts += 1;
+
+    console.log(`[SocketService] Reconnecting in ${delayMs}ms (attempt ${this.reconnectAttempts}/${maxAttempts})`);
+    this.reconnectTimeoutId = setTimeout(() => {
+      this.reconnectTimeoutId = null;
+      this.connect(this.currentRoomId, this.currentUserId, this.currentUsername).catch(() => {
+        // connect() will trigger onclose and reschedule if appropriate
+      });
+    }, delayMs);
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimeoutId) {
+      clearTimeout(this.reconnectTimeoutId);
+      this.reconnectTimeoutId = null;
     }
   }
 
@@ -337,7 +398,14 @@ export class SocketService {
   leaveRoom(): void {
     if (this.ws) {
       console.log('[SocketService] Leaving room and closing connection');
-      this.ws.close();
+      this.intentionallyClosed = true;
+      this.shouldReconnect = false;
+      this.clearReconnectTimer();
+      try {
+        this.ws.close(1000, 'Client leaving room');
+      } catch {
+        // ignore
+      }
       this.ws = null;
     }
     this.currentRoomId = '';
@@ -389,7 +457,7 @@ export class SocketService {
   }
 
   // Observable para todos los mensajes raw
-  onMessage(): Observable<any> {
+  onMessage(): Observable<WebSocketMessage> {
     return this.messageSubject.asObservable();
   }
 
@@ -415,5 +483,9 @@ export class SocketService {
 
   getCurrentRoomId(): string {
     return this.currentRoomId;
+  }
+
+  getHttpBaseUrl(): string {
+    return this.WS_BASE_URL.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
   }
 }
