@@ -39,6 +39,24 @@ builder.WebHost.ConfigureKestrel(options =>
 // Registrar RoomManager como Singleton
 builder.Services.AddSingleton<RoomManager>();
 
+var videoStorageRoot = Environment.GetEnvironmentVariable("WATCHPARTY_VIDEO_STORAGE")
+    ?? Path.Combine(Path.GetTempPath(), "watchparty_videos");
+
+var cleanupIntervalMinutes = int.TryParse(Environment.GetEnvironmentVariable("WATCHPARTY_VIDEO_CLEANUP_INTERVAL_MINUTES"), out var parsedCleanupMinutes)
+    ? parsedCleanupMinutes
+    : 0;
+var maxAgeHours = int.TryParse(Environment.GetEnvironmentVariable("WATCHPARTY_VIDEO_MAX_AGE_HOURS"), out var parsedMaxAgeHours)
+    ? parsedMaxAgeHours
+    : 24;
+
+builder.Services.AddSingleton(new VideoStorageOptions
+{
+    RootPath = videoStorageRoot,
+    CleanupInterval = TimeSpan.FromMinutes(Math.Max(0, cleanupIntervalMinutes)),
+    MaxAge = TimeSpan.FromHours(Math.Max(1, maxAgeHours))
+});
+builder.Services.AddHostedService<VideoStorageCleanupService>();
+
 // Add CORS
 builder.Services.AddCors(options =>
 {
@@ -111,8 +129,14 @@ app.UseWebSockets();
 
 var roomManager = app.Services.GetRequiredService<RoomManager>();
 
-var videoStorageRoot = Environment.GetEnvironmentVariable("WATCHPARTY_VIDEO_STORAGE")
-    ?? Path.Combine(Path.GetTempPath(), "watchparty_videos");
+// Duplicate identity handling:
+// - "reject" (default): if a userId is already connected with a different sessionKey, reject the handshake.
+// - "reassign": allow the connection and let RoomManager assign a new effective userId.
+var duplicateUserIdPolicy = (Environment.GetEnvironmentVariable("WATCHPARTY_DUPLICATE_USERID_POLICY") ?? "reject")
+    .Trim()
+    .ToLowerInvariant();
+var rejectDuplicateUserIdSessionConflicts = duplicateUserIdPolicy != "reassign";
+
 Directory.CreateDirectory(videoStorageRoot);
 
 roomManager.OnRoomRemoved = removedRoomId =>
@@ -125,9 +149,9 @@ roomManager.OnRoomRemoved = removedRoomId =>
             Directory.Delete(roomDir, recursive: true);
         }
     }
-    catch
+    catch (Exception ex)
     {
-        // ignore cleanup errors
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Video cleanup failed for room {removedRoomId}: {ex.Message}");
     }
 };
 
@@ -212,6 +236,17 @@ app.Map("/ws/{roomId}", async (HttpContext context, string roomId) =>
     if (string.IsNullOrWhiteSpace(sessionKey) || !IsValidId(sessionKey, maxLength: 128))
     {
         sessionKey = Guid.NewGuid().ToString("N");
+    }
+
+    if (rejectDuplicateUserIdSessionConflicts && roomManager.HasSessionConflict(roomId, userId, sessionKey))
+    {
+        context.Response.StatusCode = 409;
+        await context.Response.WriteAsJsonAsync(new
+        {
+            error = "Session conflict for userId (duplicate userId with different sessionKey)",
+            code = "session_conflict"
+        });
+        return;
     }
 
     var webSocket = await context.WebSockets.AcceptWebSocketAsync();
@@ -758,7 +793,20 @@ app.MapGet("/videos/{roomId}/{fileName}", (string roomId, string fileName) =>
         return Results.BadRequest(new { error = "Invalid file type" });
     }
 
-    var filePath = Path.Combine(videoStorageRoot, roomId, fileName);
+    // Defense-in-depth against path traversal (even though fileName is token-validated).
+    var videosDir = Path.Combine(videoStorageRoot, roomId);
+    var safeFileName = Path.GetFileName(fileName);
+    if (!string.Equals(safeFileName, fileName, StringComparison.Ordinal))
+    {
+        return Results.BadRequest(new { error = "Invalid file name" });
+    }
+
+    var fullVideosDir = Path.GetFullPath(videosDir) + Path.DirectorySeparatorChar;
+    var filePath = Path.GetFullPath(Path.Combine(videosDir, safeFileName));
+    if (!filePath.StartsWith(fullVideosDir, StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest(new { error = "Invalid file path" });
+    }
     if (!File.Exists(filePath))
     {
         return Results.NotFound(new { error = "Video not found" });

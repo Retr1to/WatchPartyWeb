@@ -52,6 +52,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   private pendingVideoSource: { source: VideoSource; startTime: number; shouldPlay: boolean } | null = null;
   private lastAllowedVideoTime = 0;
   private lastViewerWarningAt = 0;
+  private lastLatencyCapWarningAt = 0;
   private viewerIsSeeking = false;
   private viewerSeekRestoreTime: number | null = null;
 
@@ -763,7 +764,15 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     if (!assumePlaying) return currentTime;
     if (typeof sentAtUnixMs !== 'number' || Number.isNaN(sentAtUnixMs)) return currentTime;
     const dtSeconds = Math.max(0, (Date.now() - sentAtUnixMs) / 1000);
-    return currentTime + Math.min(dtSeconds, 10);
+    const maxAdjustmentSeconds = 10;
+    if (dtSeconds > maxAdjustmentSeconds && Date.now() - this.lastLatencyCapWarningAt > 60_000) {
+      this.lastLatencyCapWarningAt = Date.now();
+      console.warn(
+        '[RoomComponent] Latency adjustment capped',
+        { dtSeconds, maxAdjustmentSeconds, note: 'Remote sentAt may be skewed or network delay unusually high.' }
+      );
+    }
+    return currentTime + Math.min(dtSeconds, maxAdjustmentSeconds);
   }
 
   private handleCastStatusForRoomSync(status: CastStatus): void {
@@ -806,7 +815,15 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       const observedDelta = time - this.lastCastObservedTime;
       const drift = observedDelta - expectedDelta;
 
-      if (Math.abs(observedDelta) > 3 && Math.abs(drift) > 3) {
+      // Sync when drift is meaningful and either:
+      // - playback progressed noticeably but off from expectation, or
+      // - playback should have progressed but didn't (e.g., stalled/paused unexpectedly).
+      const driftThresholdSeconds = 3;
+      const syncNeeded =
+        Math.abs(drift) > driftThresholdSeconds &&
+        (Math.abs(observedDelta) > driftThresholdSeconds || Math.abs(expectedDelta) > driftThresholdSeconds);
+
+      if (syncNeeded) {
         this.isSyncing = true;
         this.lastKnownIsPlaying = !status.isPaused;
         this.socketService.seekVideo(this.roomCode, time, !status.isPaused);
@@ -1045,7 +1062,9 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       height: '100%',
       playerVars: {
         controls: 1,
-        disablekb: this.isHost() ? 0 : 1,
+        // Keep keyboard controls enabled for accessibility (volume/captions, etc.).
+        // Viewer playback/seek attempts are still reverted by `handleYouTubeStateChange`.
+        disablekb: 0,
         modestbranding: 1,
         rel: 0,
         enablejsapi: 1

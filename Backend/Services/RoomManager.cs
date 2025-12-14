@@ -40,7 +40,8 @@ namespace WatchPartyBackend.Services
         {
             var room = GetOrCreateRoom(roomId, userId);
             
-            // Close old WebSocket connection if it exists to prevent resource leaks
+            // If a client reconnects with the same (userId, sessionKey), replace the old socket to avoid
+            // leaving multiple active WebSocket connections for the same logical session.
             if (string.IsNullOrWhiteSpace(sessionKey))
             {
                 sessionKey = Guid.NewGuid().ToString("N");
@@ -85,6 +86,25 @@ namespace WatchPartyBackend.Services
         /// <summary>
         /// Remueve una conexión de una sala
         /// </summary>
+        public bool RoomExists(string roomId)
+        {
+            return _rooms.ContainsKey(roomId);
+        }
+
+        public bool HasSessionConflict(string roomId, string userId, string sessionKey)
+        {
+            if (string.IsNullOrWhiteSpace(userId)) return false;
+            if (string.IsNullOrWhiteSpace(sessionKey)) return false;
+            if (!_rooms.TryGetValue(roomId, out var room)) return false;
+
+            if (!room.Connections.ContainsKey(userId)) return false;
+
+            // If the userId is currently connected but the stored session key doesn't match,
+            // treat it as a conflict (potential hijack / duplicate identity).
+            if (!room.SessionKeys.TryGetValue(userId, out var existingSessionKey)) return true;
+            return !string.Equals(existingSessionKey, sessionKey, StringComparison.Ordinal);
+        }
+
         public bool RemoveConnection(string roomId, string userId, WebSocket? webSocket = null)
         {
             if (_rooms.TryGetValue(roomId, out var room))

@@ -351,9 +351,13 @@ export class SocketService {
 
   private startHeartbeat(): void {
     this.stopHeartbeat();
+
+    // 25s is a safe margin for common 30s idle timeouts in WebSocket proxies/load balancers
+    // (e.g., Heroku router). Override locally via localStorage `WATCHPARTY_HEARTBEAT_INTERVAL_MS` if needed.
+    const intervalMs = this.getHeartbeatIntervalMs();
     this.heartbeatIntervalId = setInterval(() => {
       this.sendMessage({ type: 'ping' });
-    }, 25000);
+    }, intervalMs);
   }
 
   private stopHeartbeat(): void {
@@ -640,5 +644,20 @@ export class SocketService {
     }
 
     return generated;
+  }
+
+  private getHeartbeatIntervalMs(): number {
+    const defaultMs = 25_000;
+
+    try {
+      const raw = localStorage.getItem('WATCHPARTY_HEARTBEAT_INTERVAL_MS');
+      if (!raw) return defaultMs;
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) return defaultMs;
+      if (parsed < 5_000 || parsed > 120_000) return defaultMs;
+      return Math.floor(parsed);
+    } catch {
+      return defaultMs;
+    }
   }
 }
