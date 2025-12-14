@@ -4,14 +4,45 @@
       <div class="room-code-display">
         <span class="room-icon">🎬</span>
         <span class="room-code">{{ roomCode }}</span>
-        <button class="copy-btn" (click)="copyRoomCode()" title="Copiar código">
+        <button class="copy-btn" (click)="copyRoomCode()" title="Copiar código de sala">ID</button>
+        <button class="copy-btn" (click)="copyInviteLink()" title="Copiar enlace de invitación">
           📋
         </button>
       </div>
     </div>
-    <button class="exit-btn" (click)="leaveRoom()">
-      Salir
-    </button>
+    <div class="room-actions">
+      <button
+        class="device-btn"
+        *ngIf="isHost() && videoUrl && videoProvider !== 'youtube'"
+        [disabled]="!castStatus?.apiAvailable || !!castStatus?.isConnected"
+        (click)="startCasting()"
+        [title]="castStatus?.apiAvailable ? 'Enviar el video a una TV (Chromecast)' : 'Cast no disponible (requiere Chrome/Edge o que cargue el SDK)'"
+      >
+        Cast
+      </button>
+
+      <ng-container *ngIf="castStatus as cs">
+        <ng-container *ngIf="cs.isConnected">
+          <span class="device-status">
+            Casting{{ cs.deviceName ? ' en ' + cs.deviceName : '' }}
+          </span>
+          <button class="device-btn device-btn-danger" (click)="stopCasting()">Desconectar</button>
+        </ng-container>
+      </ng-container>
+
+      <button
+        class="device-btn"
+        *ngIf="isHost() && videoUrl && videoProvider !== 'youtube' && airplayStatus?.supported"
+        (click)="showAirPlayPicker()"
+        title="Enviar el video a una TV (AirPlay - Safari)"
+      >
+        AirPlay
+      </button>
+
+      <button class="exit-btn" (click)="leaveRoom()">
+        Salir
+      </button>
+    </div>
   </div>
 
   <div class="room-content">
@@ -30,11 +61,13 @@
               [src]="videoUrl"
               (play)="onPlay()"
               (pause)="onPause()"
+              (seeking)="onSeeking()"
               (seeked)="onSeeked()"
               (timeupdate)="onTimeUpdate()"
               controls
               controlsList="nodownload"
               playsinline
+              x-webkit-airplay="allow"
             ></video>
           </ng-container>
         </ng-container>
@@ -127,7 +160,27 @@
   </div>
 </div>
 
-<div class="loading" *ngIf="!room">
+<div class="join-overlay" *ngIf="!room && needsJoin">
+  <div class="join-card">
+    <h2>Unirse a la sala {{ roomCode }}</h2>
+    <p class="join-subtitle">Ingresa tu nombre para continuar</p>
+    <input
+      type="text"
+      [(ngModel)]="joinUsername"
+      placeholder="Tu nombre"
+      maxlength="20"
+      (keyup.enter)="joinFromLink()"
+    />
+    <button class="btn btn-primary" [disabled]="isJoining" (click)="joinFromLink()">
+      {{ isJoining ? 'Conectando...' : 'Unirse' }}
+    </button>
+    <button class="btn btn-secondary" [disabled]="isJoining" (click)="leaveRoom()">
+      Volver
+    </button>
+  </div>
+</div>
+
+<div class="loading" *ngIf="!room && !needsJoin">
   <div class="spinner"></div>
   <p>Conectando a la sala...</p>
 </div>

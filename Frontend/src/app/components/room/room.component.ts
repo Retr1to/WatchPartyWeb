@@ -4,6 +4,8 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { SocketService, Room, Participant } from '../../services/socket.service';
 import { ToastService } from '../../services/toast.service';
+import { CastService, CastStatus } from '../../services/cast.service';
+import { AirPlayService, AirPlayStatus } from '../../services/airplay.service';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 declare const YT: any;
@@ -31,6 +33,9 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   roomCode: string = '';
   room: Room | null = null;
   currentUser: Participant | null = null;
+  needsJoin: boolean = false;
+  joinUsername: string = '';
+  isJoining: boolean = false;
   videoUrl: string = '';
   newVideoUrl: string = '';
   isChangingVideo: boolean = false;
@@ -47,12 +52,25 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   private pendingVideoSource: { source: VideoSource; startTime: number; shouldPlay: boolean } | null = null;
   private lastAllowedVideoTime = 0;
   private lastViewerWarningAt = 0;
+  private lastLatencyCapWarningAt = 0;
+  private viewerIsSeeking = false;
+  private viewerSeekRestoreTime: number | null = null;
+
+  castStatus: CastStatus | null = null;
+  airplayStatus: AirPlayStatus | null = null;
+  private lastCastObservedTime = 0;
+  private lastCastObservedAt = 0;
+  private lastCastObservedPaused: boolean | null = null;
+  private lastCastLoadedUrl: string | null = null;
+  private localVideoAudioSnapshot: { muted: boolean; volume: number } | null = null;
 
   constructor(
     private route: ActivatedRoute,
     private router: Router,
     private socketService: SocketService,
-    private toastService: ToastService
+    private toastService: ToastService,
+    private castService: CastService,
+    private airplayService: AirPlayService
   ) {}
 
   ngOnInit(): void {
@@ -72,6 +90,10 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
         }, this.room.videoState.currentTime, this.room.videoState.isPlaying);
       }
       this.findCurrentUser();
+      this.needsJoin = false;
+    } else {
+      this.needsJoin = true;
+      this.joinUsername = this.getStoredUsername() || '';
     }
     
     this.setupSocketListeners();
@@ -79,6 +101,35 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     this.socketService.connectionState$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe(connected => {
       this.isConnected = connected;
       console.log('[RoomComponent] Connection state:', connected);
+    });
+
+    this.castService.init().catch(() => {
+      // Cast is optional (Chromecast/Google TV)
+    });
+
+    this.castService.status$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((status) => {
+      this.castStatus = status;
+
+      if (!status.isConnected) {
+        this.lastCastObservedAt = 0;
+        this.lastCastObservedTime = 0;
+        this.lastCastObservedPaused = null;
+        this.lastCastLoadedUrl = null;
+        this.restoreLocalAudioAfterCast();
+        return;
+      }
+
+      this.enableLocalCastMirror();
+
+      if (this.isHost()) {
+        this.handleCastStatusForRoomSync(status);
+      }
+
+      this.mirrorCastStatusToLocal(status);
+    });
+
+    this.airplayService.status$.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((status) => {
+      this.airplayStatus = status;
     });
   }
 
@@ -101,6 +152,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       console.log('[RoomComponent] Room created:', roomCode, room);
       this.room = room;
       this.roomCode = roomCode;
+      this.needsJoin = false;
       if (room.videoState.url) {
         this.applyVideoSource({
           url: room.videoState.url,
@@ -113,6 +165,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     this.socketService.onRoomJoined().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ room }) => {
       console.log('[RoomComponent] Room joined:', room);
       this.room = room;
+      this.needsJoin = false;
       if (room.videoState.url) {
         this.applyVideoSource({
           url: room.videoState.url,
@@ -204,10 +257,11 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       }
     });
 
-    this.socketService.onVideoPlay().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ currentTime }) => {
-      console.log('[RoomComponent] Play event received, time:', currentTime);
+    this.socketService.onVideoPlay().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ currentTime, sentAtUnixMs }) => {
+      const adjustedTime = this.adjustRemoteTimeForLatency(currentTime, sentAtUnixMs, true);
+      console.log('[RoomComponent] Play event received, time:', currentTime, 'adjusted:', adjustedTime);
       this.lastKnownIsPlaying = true;
-      this.applyRemotePlay(currentTime);
+      this.applyRemotePlay(adjustedTime);
     });
 
     this.socketService.onVideoPause().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ currentTime }) => {
@@ -216,10 +270,11 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       this.applyRemotePause(currentTime);
     });
 
-    this.socketService.onVideoSeek().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ currentTime, isPlaying }) => {
-      console.log('[RoomComponent] Seek event received, time:', currentTime, 'playing:', isPlaying);
+    this.socketService.onVideoSeek().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ currentTime, isPlaying, sentAtUnixMs }) => {
+      const adjustedTime = this.adjustRemoteTimeForLatency(currentTime, sentAtUnixMs, isPlaying);
+      console.log('[RoomComponent] Seek event received, time:', currentTime, 'adjusted:', adjustedTime, 'playing:', isPlaying);
       this.lastKnownIsPlaying = isPlaying;
-      this.applyRemoteSeek(currentTime, isPlaying);
+      this.applyRemoteSeek(adjustedTime, isPlaying);
     });
 
     this.socketService.onHostChanged().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ newHostId }) => {
@@ -256,6 +311,36 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
+  private getStoredUsername(): string {
+    try {
+      return localStorage.getItem('WATCHPARTY_USERNAME') || '';
+    } catch {
+      return '';
+    }
+  }
+
+  private storeUsername(username: string): void {
+    try {
+      localStorage.setItem('WATCHPARTY_USERNAME', username);
+    } catch {
+      // ignore
+    }
+  }
+
+  joinFromLink(): void {
+    if (!this.roomCode) return;
+    if (this.isJoining) return;
+
+    const username = (this.joinUsername || '').trim() || 'Usuario';
+    this.storeUsername(username);
+
+    this.isJoining = true;
+    this.needsJoin = false;
+    this.socketService.joinRoom(this.roomCode, username).finally(() => {
+      this.isJoining = false;
+    });
+  }
+
   changeVideo(): void {
     if (!this.newVideoUrl.trim()) return;
     if (!this.isHost()) {
@@ -275,6 +360,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   onPlay(): void {
     if (this.videoProvider === 'youtube') return;
     if (!this.isHost()) {
+      if (this.isSyncing) return;
       this.handleViewerPlaybackAttempt('play');
       return;
     }
@@ -282,6 +368,13 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       this.isSyncing = true;
       const currentTime = this.videoPlayer.nativeElement.currentTime;
       console.log('[RoomComponent] Sending play event, time:', currentTime);
+      if (this.castService.isConnected()) {
+        const castTime = this.castStatus?.currentTime ?? 0;
+        if (Math.abs(castTime - currentTime) > 1) {
+          this.castService.seek(currentTime);
+        }
+        this.castService.play();
+      }
       this.socketService.playVideo(this.roomCode, currentTime);
       this.lastKnownIsPlaying = true;
       setTimeout(() => this.isSyncing = false, 200);
@@ -291,6 +384,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   onPause(): void {
     if (this.videoProvider === 'youtube') return;
     if (!this.isHost()) {
+      if (this.isSyncing) return;
       this.handleViewerPlaybackAttempt('pause');
       return;
     }
@@ -303,15 +397,35 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       this.isSyncing = true;
       const currentTime = video.currentTime;
       console.log('[RoomComponent] Sending pause event, time:', currentTime);
+      if (this.castService.isConnected()) {
+        const castTime = this.castStatus?.currentTime ?? 0;
+        if (Math.abs(castTime - currentTime) > 1) {
+          this.castService.seek(currentTime);
+        }
+        this.castService.pause();
+      }
       this.socketService.pauseVideo(this.roomCode, currentTime);
       this.lastKnownIsPlaying = false;
       setTimeout(() => this.isSyncing = false, 200);
     }
   }
 
+  onSeeking(): void {
+    if (this.videoProvider === 'youtube') return;
+    if (this.isHost()) return;
+    if (this.isSyncing) return;
+
+    const video = this.videoPlayer?.nativeElement;
+    if (!video) return;
+
+    this.viewerIsSeeking = true;
+    this.viewerSeekRestoreTime = this.lastAllowedVideoTime;
+  }
+
   onSeeked(): void {
     if (this.videoProvider === 'youtube') return;
     if (!this.isHost()) {
+      if (this.isSyncing) return;
       this.handleViewerPlaybackAttempt('seek');
       return;
     }
@@ -319,9 +433,18 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       this.isSyncing = true;
       const video = this.videoPlayer.nativeElement;
       const currentTime = video.currentTime;
-      const isPlaying = this.lastKnownIsPlaying;
+      const isPlaying = !video.paused;
       console.log('[RoomComponent] Sending seek event, time:', currentTime, 'playing:', isPlaying);
+      if (this.castService.isConnected()) {
+        this.castService.seek(currentTime);
+        if (isPlaying) {
+          this.castService.play();
+        } else {
+          this.castService.pause();
+        }
+      }
       this.socketService.seekVideo(this.roomCode, currentTime, isPlaying);
+      this.lastKnownIsPlaying = isPlaying;
       setTimeout(() => this.isSyncing = false, 200);
     }
   }
@@ -332,6 +455,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     if (!video) return;
     if (this.isSyncing) return;
     if (video.seeking) return;
+    if (!this.isHost() && this.viewerIsSeeking) return;
     this.lastAllowedVideoTime = video.currentTime;
   }
 
@@ -342,6 +466,12 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   copyRoomCode(): void {
     navigator.clipboard.writeText(this.roomCode);
     this.toastService.success('Código copiado al portapapeles');
+  }
+
+  copyInviteLink(): void {
+    const link = `${window.location.origin}/room/${this.roomCode}`;
+    navigator.clipboard.writeText(link);
+    this.toastService.success('Enlace copiado al portapapeles');
   }
 
   leaveRoom(): void {
@@ -361,6 +491,54 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   cancelVideoChange(): void {
     this.isChangingVideo = false;
     this.newVideoUrl = '';
+  }
+
+  async startCasting(): Promise<void> {
+    if (!this.isHost()) {
+      this.toastService.warning('Solo el anfitrión puede usar Cast.');
+      return;
+    }
+    if (!this.videoUrl) {
+      this.toastService.warning('No hay video para enviar.');
+      return;
+    }
+    if (this.videoProvider === 'youtube') {
+      this.toastService.warning(
+        'Cast desde el reproductor de YouTube no está soportado aquí. Usa un enlace directo (.mp4/.webm) o un archivo subido.'
+      );
+      return;
+    }
+
+    if (this.isLikelyLocalOnlyUrl(this.videoUrl)) {
+      this.toastService.warning('Para hacer Cast, la TV debe poder acceder a la URL del video (evita localhost/127.0.0.1).');
+    }
+
+    try {
+      await this.castService.requestSession();
+      const startTime = this.getCurrentPlaybackTimeSeconds();
+      const shouldPlay = this.lastKnownIsPlaying;
+      await this.castCurrentVideo(startTime, shouldPlay);
+      this.toastService.success('Conectado a Cast.');
+    } catch (e) {
+      console.error('[RoomComponent] Cast start failed:', e);
+      this.toastService.error('No se pudo iniciar Cast.');
+    }
+  }
+
+  async stopCasting(): Promise<void> {
+    try {
+      await this.castService.endSession(true);
+    } catch (e) {
+      console.error('[RoomComponent] Cast stop failed:', e);
+    }
+  }
+
+  showAirPlayPicker(): void {
+    if (!this.isHost()) return;
+    if (this.videoProvider === 'youtube') return;
+    const video = this.videoPlayer?.nativeElement;
+    if (!video) return;
+    this.airplayService.showPicker(video);
   }
 
   onFileSelected(event: any): void {
@@ -396,7 +574,8 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       const response = await fetch(`${this.socketService.getHttpBaseUrl()}/upload/${this.roomCode}`, {
         method: 'POST',
         headers: {
-          'X-User-Id': this.currentUser?.id || ''
+          'X-User-Id': this.currentUser?.id || '',
+          'X-Session-Key': this.socketService.getSessionKey()
         },
         body: formData
       });
@@ -469,6 +648,193 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     return null;
   }
 
+  private getCurrentPlaybackTimeSeconds(): number {
+    if (this.videoProvider === 'youtube') {
+      const ytTime = this.youtubePlayer?.getCurrentTime?.();
+      if (typeof ytTime === 'number' && !Number.isNaN(ytTime)) return ytTime;
+      return this.lastAllowedYouTubeTime;
+    }
+
+    const video = this.videoPlayer?.nativeElement;
+    if (video && typeof video.currentTime === 'number' && !Number.isNaN(video.currentTime)) {
+      return video.currentTime;
+    }
+    return this.lastAllowedVideoTime;
+  }
+
+  private isLikelyLocalOnlyUrl(url: string): boolean {
+    try {
+      const parsed = new URL(url);
+      const host = (parsed.hostname || '').toLowerCase();
+      return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+    } catch {
+      return false;
+    }
+  }
+
+  private enableLocalCastMirror(): void {
+    if (this.videoProvider === 'youtube') return;
+    const video = this.videoPlayer?.nativeElement;
+    if (!video) return;
+
+    if (!this.localVideoAudioSnapshot) {
+      this.localVideoAudioSnapshot = { muted: video.muted, volume: video.volume };
+    }
+    video.muted = true;
+  }
+
+  private restoreLocalAudioAfterCast(): void {
+    if (this.videoProvider === 'youtube') return;
+    const video = this.videoPlayer?.nativeElement;
+    if (!video) return;
+    if (!this.localVideoAudioSnapshot) return;
+
+    video.muted = this.localVideoAudioSnapshot.muted;
+    video.volume = this.localVideoAudioSnapshot.volume;
+    this.localVideoAudioSnapshot = null;
+  }
+
+  private mirrorCastStatusToLocal(status: CastStatus): void {
+    if (!status.isConnected) return;
+    if (this.videoProvider === 'youtube') return;
+    const video = this.videoPlayer?.nativeElement;
+    if (!video) return;
+    if (this.isSyncing) return;
+
+    const time = typeof status.currentTime === 'number' && !Number.isNaN(status.currentTime) ? status.currentTime : 0;
+    const shouldPlay = !status.isPaused;
+
+    const needsSeek = !video.seeking && Math.abs(video.currentTime - time) > 0.75;
+    const needsPlay = shouldPlay && video.paused;
+    const needsPause = !shouldPlay && !video.paused;
+
+    if (!needsSeek && !needsPlay && !needsPause) return;
+
+    this.isSyncing = true;
+    try {
+      if (needsSeek) {
+        video.currentTime = time;
+      }
+      if (needsPlay) {
+        video.play().catch(() => {
+          // ignore
+        });
+      } else if (needsPause) {
+        video.pause();
+      }
+      this.lastKnownIsPlaying = shouldPlay;
+      this.lastAllowedVideoTime = time;
+    } finally {
+      setTimeout(() => (this.isSyncing = false), 200);
+    }
+  }
+
+  private async castCurrentVideo(startTime: number, shouldPlay: boolean): Promise<void> {
+    if (!this.castService.isConnected()) return;
+    if (!this.videoUrl) return;
+    if (this.videoProvider === 'youtube') return;
+
+    if (this.lastCastLoadedUrl === this.videoUrl) {
+      this.castService.seek(startTime);
+      if (shouldPlay) {
+        this.castService.play();
+      } else {
+        this.castService.pause();
+      }
+      this.enableLocalCastMirror();
+      return;
+    }
+
+    this.isSyncing = true;
+    try {
+      await this.castService.loadMedia({
+        url: this.videoUrl,
+        currentTime: startTime,
+        autoplay: shouldPlay,
+        title: 'WatchTogether'
+      });
+      this.lastCastLoadedUrl = this.videoUrl;
+      this.enableLocalCastMirror();
+    } finally {
+      setTimeout(() => (this.isSyncing = false), 200);
+    }
+  }
+
+  private adjustRemoteTimeForLatency(currentTime: number, sentAtUnixMs?: number, assumePlaying = false): number {
+    if (!assumePlaying) return currentTime;
+    if (typeof sentAtUnixMs !== 'number' || Number.isNaN(sentAtUnixMs)) return currentTime;
+    const dtSeconds = Math.max(0, (Date.now() - sentAtUnixMs) / 1000);
+    const maxAdjustmentSeconds = 10;
+    if (dtSeconds > maxAdjustmentSeconds && Date.now() - this.lastLatencyCapWarningAt > 60_000) {
+      this.lastLatencyCapWarningAt = Date.now();
+      console.warn(
+        '[RoomComponent] Latency adjustment capped',
+        { dtSeconds, maxAdjustmentSeconds, note: 'Remote sentAt may be skewed or network delay unusually high.' }
+      );
+    }
+    return currentTime + Math.min(dtSeconds, maxAdjustmentSeconds);
+  }
+
+  private handleCastStatusForRoomSync(status: CastStatus): void {
+    if (!status.isConnected) return;
+    if (this.isSyncing) return;
+    if (!this.roomCode) return;
+    if (this.videoProvider === 'youtube') return;
+    if (typeof status.currentTime !== 'number' || Number.isNaN(status.currentTime)) return;
+
+    const now = Date.now();
+    const time = status.currentTime;
+
+    if (this.lastCastObservedPaused == null) {
+      this.lastCastObservedPaused = status.isPaused;
+      this.lastCastObservedAt = now;
+      this.lastCastObservedTime = time;
+      return;
+    }
+
+    if (status.isPaused !== this.lastCastObservedPaused) {
+      this.lastCastObservedPaused = status.isPaused;
+      this.lastCastObservedAt = now;
+      this.lastCastObservedTime = time;
+
+      this.isSyncing = true;
+      if (status.isPaused) {
+        this.lastKnownIsPlaying = false;
+        this.socketService.pauseVideo(this.roomCode, time);
+      } else {
+        this.lastKnownIsPlaying = true;
+        this.socketService.playVideo(this.roomCode, time);
+      }
+      setTimeout(() => (this.isSyncing = false), 200);
+      return;
+    }
+
+    if (this.lastCastObservedAt > 0) {
+      const dtSeconds = Math.max(0, (now - this.lastCastObservedAt) / 1000);
+      const expectedDelta = status.isPaused ? 0 : dtSeconds;
+      const observedDelta = time - this.lastCastObservedTime;
+      const drift = observedDelta - expectedDelta;
+
+      // Sync when drift is meaningful and either:
+      // - playback progressed noticeably but off from expectation, or
+      // - playback should have progressed but didn't (e.g., stalled/paused unexpectedly).
+      const driftThresholdSeconds = 3;
+      const syncNeeded =
+        Math.abs(drift) > driftThresholdSeconds &&
+        (Math.abs(observedDelta) > driftThresholdSeconds || Math.abs(expectedDelta) > driftThresholdSeconds);
+
+      if (syncNeeded) {
+        this.isSyncing = true;
+        this.lastKnownIsPlaying = !status.isPaused;
+        this.socketService.seekVideo(this.roomCode, time, !status.isPaused);
+        setTimeout(() => (this.isSyncing = false), 200);
+      }
+    }
+
+    this.lastCastObservedAt = now;
+    this.lastCastObservedTime = time;
+  }
+
   private async applyVideoSource(source: VideoSource, startTime: number, shouldPlay: boolean): Promise<void> {
     this.videoProvider = source.provider;
     this.videoId = source.videoId || null;
@@ -497,6 +863,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       const video = this.videoPlayer.nativeElement;
       video.src = this.videoUrl;
       video.load();
+      this.airplayService.attach(video);
       if (Math.abs(video.currentTime - startTime) > 0.5) {
         video.currentTime = startTime;
       }
@@ -506,6 +873,14 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
         });
       } else {
         video.pause();
+      }
+
+      if (this.isHost() && this.castService.isConnected()) {
+        try {
+          await this.castCurrentVideo(startTime, shouldPlay);
+        } catch (e) {
+          console.error('[RoomComponent] Cast load failed:', e);
+        }
       }
     }
   }
@@ -524,7 +899,22 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       return;
     }
 
-    if (this.videoPlayer?.nativeElement && !this.isSyncing) {
+    if (this.castService.isConnected() && this.videoProvider !== 'youtube') {
+      this.isSyncing = true;
+      const castTime = this.castStatus?.currentTime ?? 0;
+      if (Math.abs(castTime - currentTime) > 1) {
+        this.castService.seek(currentTime);
+      }
+      this.castService.play();
+      this.lastAllowedVideoTime = currentTime;
+      setTimeout(() => (this.isSyncing = false), 200);
+      return;
+    }
+
+    if (this.videoPlayer?.nativeElement) {
+      this.isSyncing = true;
+      this.viewerIsSeeking = false;
+      this.viewerSeekRestoreTime = null;
       const video = this.videoPlayer.nativeElement;
       if (Math.abs(video.currentTime - currentTime) > 1) {
         video.currentTime = currentTime;
@@ -533,6 +923,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
         console.error('[RoomComponent] Play failed:', err);
       });
       this.lastAllowedVideoTime = currentTime;
+      setTimeout(() => (this.isSyncing = false), 200);
     }
   }
 
@@ -550,13 +941,29 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       return;
     }
 
-    if (this.videoPlayer?.nativeElement && !this.isSyncing) {
+    if (this.castService.isConnected() && this.videoProvider !== 'youtube') {
+      this.isSyncing = true;
+      const castTime = this.castStatus?.currentTime ?? 0;
+      if (Math.abs(castTime - currentTime) > 1) {
+        this.castService.seek(currentTime);
+      }
+      this.castService.pause();
+      this.lastAllowedVideoTime = currentTime;
+      setTimeout(() => (this.isSyncing = false), 200);
+      return;
+    }
+
+    if (this.videoPlayer?.nativeElement) {
+      this.isSyncing = true;
+      this.viewerIsSeeking = false;
+      this.viewerSeekRestoreTime = null;
       const video = this.videoPlayer.nativeElement;
       if (Math.abs(video.currentTime - currentTime) > 1) {
         video.currentTime = currentTime;
       }
       video.pause();
       this.lastAllowedVideoTime = currentTime;
+      setTimeout(() => (this.isSyncing = false), 200);
     }
   }
 
@@ -576,7 +983,23 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       return;
     }
 
-    if (this.videoPlayer?.nativeElement && !this.isSyncing) {
+    if (this.castService.isConnected() && this.videoProvider !== 'youtube') {
+      this.isSyncing = true;
+      this.castService.seek(currentTime);
+      if (isPlaying) {
+        this.castService.play();
+      } else {
+        this.castService.pause();
+      }
+      this.lastAllowedVideoTime = currentTime;
+      setTimeout(() => (this.isSyncing = false), 200);
+      return;
+    }
+
+    if (this.videoPlayer?.nativeElement) {
+      this.isSyncing = true;
+      this.viewerIsSeeking = false;
+      this.viewerSeekRestoreTime = null;
       const video = this.videoPlayer.nativeElement;
       video.currentTime = currentTime;
       if (isPlaying) {
@@ -587,6 +1010,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
         video.pause();
       }
       this.lastAllowedVideoTime = currentTime;
+      setTimeout(() => (this.isSyncing = false), 200);
     }
   }
 
@@ -638,6 +1062,8 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       height: '100%',
       playerVars: {
         controls: 1,
+        // Keep keyboard controls enabled for accessibility (volume/captions, etc.).
+        // Viewer playback/seek attempts are still reverted by `handleYouTubeStateChange`.
         disablekb: 0,
         modestbranding: 1,
         rel: 0,
@@ -674,7 +1100,15 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       if (!this.youtubePlayer.getCurrentTime) return;
       const t = this.youtubePlayer.getCurrentTime();
       if (typeof t === 'number' && !Number.isNaN(t)) {
-        this.lastAllowedYouTubeTime = t;
+        if (this.isHost()) {
+          this.lastAllowedYouTubeTime = t;
+          return;
+        }
+
+        // As viewer, don't let local seeks overwrite the "allowed" time.
+        if (Math.abs(t - this.lastAllowedYouTubeTime) <= 1.25) {
+          this.lastAllowedYouTubeTime = t;
+        }
       }
     }, 500);
   }
@@ -687,13 +1121,13 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   private handleViewerPlaybackAttempt(action: 'play' | 'pause' | 'seek'): void {
+    if (this.isSyncing) return;
+
     const now = Date.now();
     if (now - this.lastViewerWarningAt > 2500) {
       this.lastViewerWarningAt = now;
       this.toastService.info('Puedes ajustar volumen/subtítulos, pero solo el anfitrión controla la reproducción.');
     }
-
-    if (this.isSyncing) return;
 
     if (this.videoProvider === 'youtube') {
       if (!this.youtubePlayer) return;
@@ -720,8 +1154,11 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     if (!video) return;
 
     this.isSyncing = true;
+    this.viewerIsSeeking = false;
+    const seekRestoreTime = this.viewerSeekRestoreTime;
+    this.viewerSeekRestoreTime = null;
     const shouldPlay = this.lastKnownIsPlaying;
-    const restoreTime = this.lastAllowedVideoTime;
+    const restoreTime = action === 'seek' && typeof seekRestoreTime === 'number' ? seekRestoreTime : this.lastAllowedVideoTime;
 
     if (action === 'seek' && Math.abs(video.currentTime - restoreTime) > 0.5) {
       video.currentTime = restoreTime;

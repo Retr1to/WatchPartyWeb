@@ -42,8 +42,17 @@ export class HomeComponent {
     });
   }
 
+  private storeUsername(username: string): void {
+    try {
+      localStorage.setItem('WATCHPARTY_USERNAME', username);
+    } catch {
+      // ignore
+    }
+  }
+
   createNewRoom(): void {
     const username = this.username.trim() || 'Anfitrión';
+    this.storeUsername(username);
     this.socketService.createRoom(username);
   }
 
@@ -58,6 +67,7 @@ export class HomeComponent {
     }
 
     const username = this.username.trim() || 'Usuario';
+    this.storeUsername(username);
     this.socketService.joinRoom(this.roomCode.toUpperCase(), username);
   }
 

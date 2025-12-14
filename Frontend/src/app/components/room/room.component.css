@@ -17,6 +17,47 @@
   border: 1px solid var(--border-base);
 }
 
+.room-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.device-status {
+  color: var(--text-tertiary);
+  font-size: 0.9rem;
+}
+
+.device-btn {
+  padding: 10px 14px;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  border: 2px solid var(--border-base);
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.device-btn:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
+}
+
+.device-btn-danger {
+  border-color: var(--color-error-border);
+  color: var(--color-error);
+  background: var(--color-error-bg);
+}
+
+.device-btn-danger:hover {
+  background: var(--color-error-border);
+  color: var(--text-primary);
+}
+
 .room-info {
   display: flex;
   align-items: center;
@@ -349,6 +390,60 @@
   color: var(--text-primary);
 }
 
+.join-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 1000;
+}
+
+.join-card {
+  width: 100%;
+  max-width: 460px;
+  background: var(--surface-base);
+  border: 1px solid var(--border-base);
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.join-card h2 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.join-subtitle {
+  margin: 0 0 6px 0;
+  color: var(--text-secondary);
+}
+
+.join-card input {
+  width: 100%;
+  padding: 14px 18px;
+  border-radius: 10px;
+  border: 2px solid var(--border-base);
+  background: var(--surface-base);
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.join-card input:focus {
+  border-color: var(--border-focus);
+  background: var(--surface-hover);
+}
+
+.join-card .btn {
+  width: 100%;
+}
+
 @media (max-width: 1024px) {
   .room-content {
     grid-template-columns: 1fr;
@@ -366,6 +461,11 @@
   }
 
   .room-code-display {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .room-actions {
     width: 100%;
     justify-content: center;
   }

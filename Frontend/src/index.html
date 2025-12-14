@@ -6,6 +6,9 @@
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <!-- Chromecast / Google Cast Sender SDK (device discovery + casting) -->
+  <!-- Security note: this SDK isn't version-pinned; adding SRI can break when Google updates the file. -->
+  <script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
 </head>
 <body data-theme="neon-nostalgia">
   <app-root></app-root>
