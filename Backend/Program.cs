@@ -1,11 +1,25 @@
 ﻿using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.FileProviders;
 using WatchPartyBackend.Models;
 using WatchPartyBackend.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var herokuPort = Environment.GetEnvironmentVariable("PORT");
+if (int.TryParse(herokuPort, out var port))
+{
+    builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+}
+
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(options =>
 {
     options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
@@ -30,34 +44,94 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:4200")
+        var explicitOrigin = builder.Configuration["WATCHPARTY_FRONTEND_ORIGIN"] ?? Environment.GetEnvironmentVariable("WATCHPARTY_FRONTEND_ORIGIN");
+
+        policy.SetIsOriginAllowed(origin =>
+              {
+                  if (string.IsNullOrWhiteSpace(origin)) return false;
+
+                  if (!string.IsNullOrWhiteSpace(explicitOrigin) &&
+                      string.Equals(origin, explicitOrigin, StringComparison.OrdinalIgnoreCase))
+                  {
+                      return true;
+                  }
+
+                  if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
+
+                  if (uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+                      uri.Host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase))
+                  {
+                      return true;
+                  }
+
+                  return false;
+              })
               .AllowAnyMethod()
               .AllowAnyHeader()
               .AllowCredentials();
     });
 });
 
- // Ensure wwwroot exists (serves uploaded videos and avoids StaticFileMiddleware warnings).
+// Ensure wwwroot exists (best-effort; some hosts only allow writes under /tmp).
 var webRootPath = Path.Combine(builder.Environment.ContentRootPath, "wwwroot");
-Directory.CreateDirectory(webRootPath);
-Directory.CreateDirectory(Path.Combine(webRootPath, "videos"));
+try
+{
+    Directory.CreateDirectory(webRootPath);
+    Directory.CreateDirectory(Path.Combine(webRootPath, "videos"));
+}
+catch
+{
+    // ignore
+}
 
  var app = builder.Build();
  
- var runtimeWebRootPath = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
- Directory.CreateDirectory(runtimeWebRootPath);
- Directory.CreateDirectory(Path.Combine(runtimeWebRootPath, "videos"));
- app.Environment.WebRootPath = runtimeWebRootPath;
- app.Environment.WebRootFileProvider = new PhysicalFileProvider(runtimeWebRootPath);
+var runtimeWebRootPath = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+try
+{
+    Directory.CreateDirectory(runtimeWebRootPath);
+    Directory.CreateDirectory(Path.Combine(runtimeWebRootPath, "videos"));
+}
+catch
+{
+    // ignore
+}
+app.Environment.WebRootPath = runtimeWebRootPath;
+app.Environment.WebRootFileProvider = new PhysicalFileProvider(runtimeWebRootPath);
 
-app.UseHttpsRedirection();
+app.UseForwardedHeaders();
+if (app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
+app.UseDefaultFiles();
 app.UseStaticFiles(); // ✅ Sirve archivos de wwwroot/
 app.UseCors("AllowFrontend");
 app.UseWebSockets();
 
 var roomManager = app.Services.GetRequiredService<RoomManager>();
 
-app.MapGet("/", () => "WatchParty Backend is running!");
+var videoStorageRoot = Environment.GetEnvironmentVariable("WATCHPARTY_VIDEO_STORAGE")
+    ?? Path.Combine(Path.GetTempPath(), "watchparty_videos");
+Directory.CreateDirectory(videoStorageRoot);
+
+roomManager.OnRoomRemoved = removedRoomId =>
+{
+    try
+    {
+        var roomDir = Path.Combine(videoStorageRoot, removedRoomId);
+        if (Directory.Exists(roomDir))
+        {
+            Directory.Delete(roomDir, recursive: true);
+        }
+    }
+    catch
+    {
+        // ignore cleanup errors
+    }
+};
+
+app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 
 static bool IsValidId(string value, int maxLength = 64)
 {
@@ -74,6 +148,29 @@ static string SanitizeUsername(string username)
     }
 
     return trimmed;
+}
+
+static bool IsValidFileToken(string value, int maxLength = 128)
+{
+    if (string.IsNullOrWhiteSpace(value) || value.Length > maxLength) return false;
+    return value.All(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.');
+}
+
+static bool IsAllowedVideoExtension(string extension)
+{
+    var ext = (extension ?? string.Empty).ToLowerInvariant();
+    return ext is ".mp4" or ".webm" or ".ogg" or ".mov";
+}
+
+static string GetVideoContentType(string extension)
+{
+    return extension.ToLowerInvariant() switch
+    {
+        ".webm" => "video/webm",
+        ".ogg" => "video/ogg",
+        ".mov" => "video/quicktime",
+        _ => "video/mp4"
+    };
 }
 
 // ============================================================
@@ -111,16 +208,30 @@ app.Map("/ws/{roomId}", async (HttpContext context, string roomId) =>
         username = $"User{Random.Shared.Next(1000, 9999)}";
     }
 
+    var sessionKey = context.Request.Query["sessionKey"].ToString();
+    if (string.IsNullOrWhiteSpace(sessionKey) || !IsValidId(sessionKey, maxLength: 128))
+    {
+        sessionKey = Guid.NewGuid().ToString("N");
+    }
+
     var webSocket = await context.WebSockets.AcceptWebSocketAsync();
 
     // Obtener o crear sala y agregar conexión
-    await roomManager.AddConnection(roomId, userId, webSocket, username);
+    userId = await roomManager.AddConnection(roomId, userId, sessionKey, webSocket, username);
 
     var isHost = roomManager.IsHost(roomId, userId);
 
     Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] User {userId} ({username}) joined room {roomId} as {(isHost ? "HOST" : "VIEWER")}");
 
     // ✅ Enviar lista de usuarios actuales al nuevo usuario
+    await roomManager.SendToUser(roomId, userId, new WebSocketMessage
+    {
+        Type = "welcome",
+        UserId = userId,
+        Username = username,
+        IsHost = isHost
+    });
+
     var currentUsers = roomManager.GetRoomUsers(roomId);
     var usersList = currentUsers.Select(u => new
     {
@@ -327,6 +438,7 @@ async Task ProcessMessage(string roomId, string userId, WebSocketMessage message
             {
                 Type = "play",
                 Timestamp = message.Timestamp,
+                SentAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 IsHost = true,
                 UserId = userId
             }, userId);
@@ -353,6 +465,7 @@ async Task ProcessMessage(string roomId, string userId, WebSocketMessage message
             {
                 Type = "pause",
                 Timestamp = message.Timestamp,
+                SentAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 IsHost = true,
                 UserId = userId
             }, userId);
@@ -386,6 +499,7 @@ async Task ProcessMessage(string roomId, string userId, WebSocketMessage message
                     {
                         Type = "seek",
                         Timestamp = message.Timestamp,
+                        SentAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                         IsPlaying = true,
                         IsHost = true,
                         UserId = userId
@@ -396,6 +510,7 @@ async Task ProcessMessage(string roomId, string userId, WebSocketMessage message
                     {
                         Type = "play",
                         Timestamp = message.Timestamp,
+                        SentAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                         IsHost = true,
                         UserId = userId
                     }, userId);
@@ -410,6 +525,7 @@ async Task ProcessMessage(string roomId, string userId, WebSocketMessage message
                     {
                         Type = "seek",
                         Timestamp = message.Timestamp,
+                        SentAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                         IsPlaying = false,
                         IsHost = true,
                         UserId = userId
@@ -475,6 +591,13 @@ async Task ProcessMessage(string roomId, string userId, WebSocketMessage message
             }
             break;
 
+        case "ping":
+            await roomManager.SendToUser(roomId, userId, new WebSocketMessage
+            {
+                Type = "pong"
+            });
+            break;
+
         case "chat":
             await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
             {
@@ -527,9 +650,11 @@ app.MapPost("/upload/{roomId}", async (HttpContext context, string roomId) =>
     }
 
     var userIdHeader = context.Request.Headers["X-User-Id"].ToString();
+    var sessionKeyHeader = context.Request.Headers["X-Session-Key"].ToString();
     var isHost = roomManager.IsHost(roomId, userIdHeader);
+    var isSessionValid = roomManager.ValidateSession(roomId, userIdHeader, sessionKeyHeader);
 
-    if (!isHost)
+    if (!isHost || !isSessionValid)
     {
         context.Response.StatusCode = 403;
         await context.Response.WriteAsJsonAsync(new { error = "Only the host can upload videos" });
@@ -554,10 +679,9 @@ app.MapPost("/upload/{roomId}", async (HttpContext context, string roomId) =>
     }
 
     // ✅ Validar tipo de archivo
-    var allowedExtensions = new[] { ".mp4", ".webm", ".ogg", ".mov" };
     var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
 
-    if (!allowedExtensions.Contains(extension))
+    if (!IsAllowedVideoExtension(extension))
     {
         context.Response.StatusCode = 400;
         await context.Response.WriteAsJsonAsync(new { error = "Invalid file type. Allowed: mp4, webm, ogg, mov" });
@@ -565,7 +689,7 @@ app.MapPost("/upload/{roomId}", async (HttpContext context, string roomId) =>
     }
 
     // ✅ Crear directorio si no existe
-    var videosDir = Path.Combine(app.Environment.WebRootPath, "videos", roomId);
+    var videosDir = Path.Combine(videoStorageRoot, roomId);
     Directory.CreateDirectory(videosDir);
 
     // ✅ Generar nombre único para evitar colisiones
@@ -614,6 +738,37 @@ app.MapPost("/upload/{roomId}", async (HttpContext context, string roomId) =>
 });
 
 // ============================================================
+// ENDPOINT: Servir video de una sala (almacenamiento temporal)
+// ============================================================
+app.MapGet("/videos/{roomId}/{fileName}", (string roomId, string fileName) =>
+{
+    if (!IsValidId(roomId))
+    {
+        return Results.BadRequest(new { error = "Invalid room id" });
+    }
+
+    if (!IsValidFileToken(fileName))
+    {
+        return Results.BadRequest(new { error = "Invalid file name" });
+    }
+
+    var extension = Path.GetExtension(fileName).ToLowerInvariant();
+    if (!IsAllowedVideoExtension(extension))
+    {
+        return Results.BadRequest(new { error = "Invalid file type" });
+    }
+
+    var filePath = Path.Combine(videoStorageRoot, roomId, fileName);
+    if (!File.Exists(filePath))
+    {
+        return Results.NotFound(new { error = "Video not found" });
+    }
+
+    var contentType = GetVideoContentType(extension);
+    return Results.File(filePath, contentType: contentType, enableRangeProcessing: true);
+});
+
+// ============================================================
 // ENDPOINT: Listar videos disponibles en una sala
 // ============================================================
 app.MapGet("/videos/{roomId}", (string roomId) =>
@@ -623,7 +778,7 @@ app.MapGet("/videos/{roomId}", (string roomId) =>
         return Results.BadRequest(new { error = "Invalid room id" });
     }
 
-    var videosDir = Path.Combine(app.Environment.WebRootPath, "videos", roomId);
+    var videosDir = Path.Combine(videoStorageRoot, roomId);
 
     if (!Directory.Exists(videosDir))
     {
@@ -674,5 +829,11 @@ app.MapGet("/room/{roomId}/state", (string roomId) =>
         users = usersList
     });
 });
+
+var spaIndexPath = Path.Combine(app.Environment.WebRootPath ?? app.Environment.ContentRootPath, "index.html");
+if (File.Exists(spaIndexPath))
+{
+    app.MapFallbackToFile("index.html");
+}
 
 app.Run();

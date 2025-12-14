@@ -32,6 +32,7 @@ export interface Room {
 interface WebSocketMessage {
   type: string;
   timestamp?: number;
+  sentAtUnixMs?: number;
   userId?: string;
   username?: string;
   isHost?: boolean;
@@ -49,14 +50,17 @@ interface WebSocketMessage {
 })
 export class SocketService {
   private ws: WebSocket | null = null;
-  private readonly WS_BASE_URL = 'wss://localhost:7186';
+  private readonly WS_BASE_URL = this.computeWsBaseUrl();
   private currentRoomId: string = '';
   private currentUserId: string = '';
   private currentUsername: string = '';
+  private currentIsHost = false;
+  private readonly sessionKey = this.loadOrCreateSessionKey();
   private intentionallyClosed = false;
   private shouldReconnect = false;
   private reconnectAttempts = 0;
   private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatIntervalId: ReturnType<typeof setInterval> | null = null;
   
   // Subjects para eventos
   private roomCreatedSubject = new Subject<{ roomCode: string; room: Room }>();
@@ -65,9 +69,9 @@ export class SocketService {
   private participantJoinedSubject = new Subject<{ participant: Participant; participants: Participant[] }>();
   private participantLeftSubject = new Subject<{ participantId: string; participants: Participant[] }>();
   private videoChangedSubject = new Subject<{ url: string; provider?: string; videoId?: string }>();
-  private videoPlaySubject = new Subject<{ currentTime: number }>();
-  private videoPauseSubject = new Subject<{ currentTime: number }>();
-  private videoSeekSubject = new Subject<{ currentTime: number; isPlaying: boolean }>();
+  private videoPlaySubject = new Subject<{ currentTime: number; sentAtUnixMs?: number }>();
+  private videoPauseSubject = new Subject<{ currentTime: number; sentAtUnixMs?: number }>();
+  private videoSeekSubject = new Subject<{ currentTime: number; isPlaying: boolean; sentAtUnixMs?: number }>();
   private hostChangedSubject = new Subject<{ newHostId: string }>();
   
   // Subject para room_state
@@ -82,6 +86,28 @@ export class SocketService {
 
   constructor() {
     console.log('[SocketService] Service initialized');
+  }
+
+  private computeWsBaseUrl(): string {
+    try {
+      const win = window as any;
+      const override =
+        (typeof win.__WATCHPARTY_WS_BASE_URL === 'string' && win.__WATCHPARTY_WS_BASE_URL.trim()) ||
+        (typeof localStorage !== 'undefined' && localStorage.getItem('WATCHPARTY_WS_BASE_URL')?.trim()) ||
+        '';
+      if (override) return override;
+
+      const { protocol, hostname, host, port } = window.location;
+      const wsProtocol = protocol === 'https:' ? 'wss' : 'ws';
+
+      if ((hostname === 'localhost' || hostname === '127.0.0.1') && (port === '4200' || port === '')) {
+        return 'wss://localhost:7186';
+      }
+
+      return `${wsProtocol}://${host}`;
+    } catch {
+      return 'wss://localhost:7186';
+    }
   }
 
   // ============================================================
@@ -113,11 +139,12 @@ export class SocketService {
         }
       }
 
+      this.stopHeartbeat();
       this.clearReconnectTimer();
       this.intentionallyClosed = false;
       this.shouldReconnect = true;
 
-      const wsUrl = `${this.WS_BASE_URL}/ws/${roomId}?userId=${userId}&username=${encodeURIComponent(username)}`;
+      const wsUrl = `${this.WS_BASE_URL}/ws/${roomId}?userId=${userId}&username=${encodeURIComponent(username)}&sessionKey=${encodeURIComponent(this.sessionKey)}`;
       console.log('[SocketService] Connecting to:', wsUrl);
 
       const socket = new WebSocket(wsUrl);
@@ -131,6 +158,7 @@ export class SocketService {
         console.log('[SocketService] WebSocket connected!');
         this.reconnectAttempts = 0;
         this.connectionStateSubject.next(true);
+        this.startHeartbeat();
         didOpen = true;
         if (settled) return;
         settled = true;
@@ -141,6 +169,7 @@ export class SocketService {
         if (this.ws !== socket) return;
         console.error('[SocketService] WebSocket error:', error);
         this.connectionStateSubject.next(false);
+        this.stopHeartbeat();
         if (!settled) {
           settled = true;
           reject(error);
@@ -151,6 +180,7 @@ export class SocketService {
         if (this.ws !== socket) return;
         console.log('[SocketService] WebSocket closed', { code: event.code, reason: event.reason });
         this.connectionStateSubject.next(false);
+        this.stopHeartbeat();
 
         if (!didOpen && !settled && !this.intentionallyClosed) {
           settled = true;
@@ -182,6 +212,18 @@ export class SocketService {
       this.messageSubject.next(message);
 
       switch (message.type) {
+        case 'welcome':
+          if (message.userId) {
+            this.currentUserId = message.userId;
+          }
+          if (typeof message.username === 'string') {
+            this.currentUsername = message.username;
+          }
+          this.currentIsHost = !!message.isHost;
+          break;
+        case 'pong':
+          // keep-alive response (useful on platforms like Heroku)
+          break;
         case 'state':
           if (message.state) {
             const newUrl = message.state.videoUrl || message.state.videoFileName;
@@ -203,13 +245,18 @@ export class SocketService {
             if (roomData.users && Array.isArray(roomData.users)) {
               console.log('[SocketService] Parsed users:', roomData.users);
               
-              this.roomStateSubject.next({
-                users: roomData.users.map((u: any) => ({
-                  id: u.userId,
-                  username: u.username,
-                  isHost: u.isHost
-                }))
-              });
+              const users: Participant[] = roomData.users.map((u: any) => ({
+                id: u.userId,
+                username: u.username,
+                isHost: u.isHost
+              }));
+
+              const me = users.find(u => u.id === this.currentUserId);
+              if (me) {
+                this.currentIsHost = !!me.isHost;
+              }
+
+              this.roomStateSubject.next({ users });
             }
           } catch (e) {
             console.error('[SocketService] Error parsing room_state:', e);
@@ -217,15 +264,19 @@ export class SocketService {
           break;
 
         case 'play':
-          this.videoPlaySubject.next({ currentTime: message.timestamp || 0 });
+          this.videoPlaySubject.next({ currentTime: message.timestamp || 0, sentAtUnixMs: message.sentAtUnixMs });
           break;
 
         case 'pause':
-          this.videoPauseSubject.next({ currentTime: message.timestamp || 0 });
+          this.videoPauseSubject.next({ currentTime: message.timestamp || 0, sentAtUnixMs: message.sentAtUnixMs });
           break;
 
         case 'seek':
-          this.videoSeekSubject.next({ currentTime: message.timestamp ?? 0, isPlaying: message.isPlaying ?? false });
+          this.videoSeekSubject.next({
+            currentTime: message.timestamp ?? 0,
+            isPlaying: message.isPlaying ?? false,
+            sentAtUnixMs: message.sentAtUnixMs
+          });
           break;
 
         case 'change_video':
@@ -236,6 +287,7 @@ export class SocketService {
 
         case 'host_changed':
           if (message.userId) {
+            this.currentIsHost = message.userId === this.currentUserId;
             this.hostChangedSubject.next({ newHostId: message.userId });
           }
           break;
@@ -288,10 +340,26 @@ export class SocketService {
   private sendMessage(message: WebSocketMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       const messageStr = JSON.stringify(message);
-      console.log('[SocketService] Sending message:', messageStr);
+      if (message.type !== 'ping') {
+        console.log('[SocketService] Sending message:', messageStr);
+      }
       this.ws.send(messageStr);
     } else {
       console.error('[SocketService] WebSocket not connected. Cannot send message.');
+    }
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatIntervalId = setInterval(() => {
+      this.sendMessage({ type: 'ping' });
+    }, 25000);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatIntervalId) {
+      clearInterval(this.heartbeatIntervalId);
+      this.heartbeatIntervalId = null;
     }
   }
 
@@ -335,6 +403,7 @@ export class SocketService {
     this.currentRoomId = this.generateRoomCode();
     this.currentUserId = this.generateUserId();
     this.currentUsername = username;
+    this.currentIsHost = true;
 
     try {
       await this.connect(this.currentRoomId, this.currentUserId, username);
@@ -364,6 +433,7 @@ export class SocketService {
     this.currentRoomId = roomCode;
     this.currentUserId = this.generateUserId();
     this.currentUsername = username;
+    this.currentIsHost = false;
 
     try {
       await this.connect(roomCode, this.currentUserId, username);
@@ -390,6 +460,10 @@ export class SocketService {
   }
 
   changeVideo(roomCode: string, url: string, provider?: string, videoId?: string): void {
+    if (!this.currentIsHost) {
+      console.warn('[SocketService] Ignoring changeVideo: current user is not host');
+      return;
+    }
     // Emit locally for immediate feedback
     this.videoChangedSubject.next({ url, provider, videoId });
     this.sendMessage({
@@ -401,6 +475,10 @@ export class SocketService {
   }
 
   playVideo(roomCode: string, currentTime: number): void {
+    if (!this.currentIsHost) {
+      console.warn('[SocketService] Ignoring playVideo: current user is not host');
+      return;
+    }
     this.sendMessage({
       type: 'play',
       timestamp: currentTime
@@ -408,6 +486,10 @@ export class SocketService {
   }
 
   pauseVideo(roomCode: string, currentTime: number): void {
+    if (!this.currentIsHost) {
+      console.warn('[SocketService] Ignoring pauseVideo: current user is not host');
+      return;
+    }
     this.sendMessage({
       type: 'pause',
       timestamp: currentTime
@@ -415,6 +497,10 @@ export class SocketService {
   }
 
   seekVideo(roomCode: string, currentTime: number, isPlaying: boolean): void {
+    if (!this.currentIsHost) {
+      console.warn('[SocketService] Ignoring seekVideo: current user is not host');
+      return;
+    }
     this.sendMessage({
       type: 'seek',
       timestamp: currentTime,
@@ -428,6 +514,7 @@ export class SocketService {
       this.intentionallyClosed = true;
       this.shouldReconnect = false;
       this.reconnectAttempts = 0;
+      this.stopHeartbeat();
       this.clearReconnectTimer();
       try {
         this.ws.close(1000, 'Client leaving room');
@@ -438,6 +525,8 @@ export class SocketService {
     }
     this.currentRoomId = '';
     this.currentUserId = '';
+    this.currentUsername = '';
+    this.currentIsHost = false;
   }
 
   // ============================================================
@@ -468,15 +557,15 @@ export class SocketService {
     return this.videoChangedSubject.asObservable();
   }
 
-  onVideoPlay(): Observable<{ currentTime: number }> {
+  onVideoPlay(): Observable<{ currentTime: number; sentAtUnixMs?: number }> {
     return this.videoPlaySubject.asObservable();
   }
 
-  onVideoPause(): Observable<{ currentTime: number }> {
+  onVideoPause(): Observable<{ currentTime: number; sentAtUnixMs?: number }> {
     return this.videoPauseSubject.asObservable();
   }
 
-  onVideoSeek(): Observable<{ currentTime: number; isPlaying: boolean }> {
+  onVideoSeek(): Observable<{ currentTime: number; isPlaying: boolean; sentAtUnixMs?: number }> {
     return this.videoSeekSubject.asObservable();
   }
 
@@ -515,5 +604,41 @@ export class SocketService {
 
   getHttpBaseUrl(): string {
     return this.WS_BASE_URL.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:');
+  }
+
+  getSessionKey(): string {
+    return this.sessionKey;
+  }
+
+  private loadOrCreateSessionKey(): string {
+    const storageKey = 'WATCHPARTY_SESSION_KEY';
+
+    try {
+      const existing = localStorage.getItem(storageKey);
+      if (existing && existing.trim()) return existing.trim();
+    } catch {
+      // ignore
+    }
+
+    const bytes = new Uint8Array(32);
+    try {
+      crypto.getRandomValues(bytes);
+    } catch {
+      for (let i = 0; i < bytes.length; i += 1) {
+        bytes[i] = Math.floor(Math.random() * 256);
+      }
+    }
+
+    const generated = Array.from(bytes)
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+
+    try {
+      localStorage.setItem(storageKey, generated);
+    } catch {
+      // ignore
+    }
+
+    return generated;
   }
 }

@@ -16,6 +16,11 @@ namespace WatchPartyBackend.Models
         public double? Timestamp { get; set; }
 
         /// <summary>
+        /// Tiempo del servidor en el que se emite el mensaje (Unix epoch en milisegundos)
+        /// </summary>
+        public long? SentAtUnixMs { get; set; }
+
+        /// <summary>
         /// ID del usuario que envía el mensaje
         /// </summary>
         public string? UserId { get; set; }

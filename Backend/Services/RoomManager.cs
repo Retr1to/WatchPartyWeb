@@ -13,6 +13,8 @@ namespace WatchPartyBackend.Services
     {
         private readonly ConcurrentDictionary<string, Room> _rooms = new();
 
+        public Action<string>? OnRoomRemoved { get; set; }
+
         private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -34,23 +36,50 @@ namespace WatchPartyBackend.Services
         /// <summary>
         /// Agrega una conexión a una sala
         /// </summary>
-        public async Task AddConnection(string roomId, string userId, WebSocket webSocket, string username = "")
+        public async Task<string> AddConnection(string roomId, string userId, string sessionKey, WebSocket webSocket, string username = "")
         {
             var room = GetOrCreateRoom(roomId, userId);
             
             // Close old WebSocket connection if it exists to prevent resource leaks
-            if (room.Connections.TryGetValue(userId, out var oldSocket))
+            if (string.IsNullOrWhiteSpace(sessionKey))
             {
-                await CloseWebSocketSafely(oldSocket);
+                sessionKey = Guid.NewGuid().ToString("N");
             }
-            
-            room.Connections.AddOrUpdate(userId, webSocket, (_, _) => webSocket);
+
+            var effectiveUserId = userId;
+
+            if (room.Connections.ContainsKey(userId))
+            {
+                if (room.SessionKeys.TryGetValue(userId, out var existingSessionKey) &&
+                    string.Equals(existingSessionKey, sessionKey, StringComparison.Ordinal))
+                {
+                    if (room.Connections.TryGetValue(userId, out var oldSocket))
+                    {
+                        await CloseWebSocketSafely(oldSocket);
+                    }
+                }
+                else
+                {
+                    var guidToken = Guid.NewGuid().ToString("N")[..8];
+                    effectiveUserId = $"user_{guidToken}";
+                    while (room.Connections.ContainsKey(effectiveUserId))
+                    {
+                        guidToken = Guid.NewGuid().ToString("N")[..8];
+                        effectiveUserId = $"user_{guidToken}";
+                    }
+                }
+            }
+
+            room.Connections.AddOrUpdate(effectiveUserId, webSocket, (_, _) => webSocket);
+            room.SessionKeys.AddOrUpdate(effectiveUserId, sessionKey, (_, _) => sessionKey);
 
             // ✅ Guardar username
             if (!string.IsNullOrEmpty(username))
             {
-                room.Usernames.AddOrUpdate(userId, username, (_, _) => username);
+                room.Usernames.AddOrUpdate(effectiveUserId, username, (_, _) => username);
             }
+
+            return effectiveUserId;
         }
 
         /// <summary>
@@ -78,11 +107,22 @@ namespace WatchPartyBackend.Services
                     return false;
                 }
                 room.Usernames.TryRemove(userId, out _);
+                room.SessionKeys.TryRemove(userId, out _);
 
                 // Si la sala queda vacía, eliminarla
                 if (room.Connections.IsEmpty)
                 {
-                    _rooms.TryRemove(roomId, out _);
+                    if (_rooms.TryRemove(roomId, out _))
+                    {
+                        try
+                        {
+                            OnRoomRemoved?.Invoke(roomId);
+                        }
+                        catch
+                        {
+                            // ignore cleanup errors
+                        }
+                    }
                 }
 
                 return true;
@@ -110,6 +150,14 @@ namespace WatchPartyBackend.Services
         public bool IsHost(string roomId, string userId)
         {
             return _rooms.TryGetValue(roomId, out var room) && room.HostId == userId;
+        }
+
+        public bool ValidateSession(string roomId, string userId, string sessionKey)
+        {
+            if (string.IsNullOrWhiteSpace(sessionKey)) return false;
+            if (!_rooms.TryGetValue(roomId, out var room)) return false;
+            return room.SessionKeys.TryGetValue(userId, out var existing) &&
+                   string.Equals(existing, sessionKey, StringComparison.Ordinal);
         }
 
         /// <summary>

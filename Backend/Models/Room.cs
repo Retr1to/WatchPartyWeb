@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 
 namespace WatchPartyBackend.Models
@@ -33,6 +33,12 @@ namespace WatchPartyBackend.Models
         /// Nombres de usuarios: Key = UserId, Value = Username
         /// </summary>
         public ConcurrentDictionary<string, string> Usernames { get; set; }
+            = new ConcurrentDictionary<string, string>();
+
+        /// <summary>
+        /// Llaves de sesión por usuario (para evitar suplantación por UserId).
+        /// </summary>
+        public ConcurrentDictionary<string, string> SessionKeys { get; set; }
             = new ConcurrentDictionary<string, string>();
 
         /// <summary>
