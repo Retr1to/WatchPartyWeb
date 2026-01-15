@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using WatchPartyBackend.Models;
 using WatchPartyBackend.Services;
+using WatchPartyBackend.Soap;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -39,8 +40,9 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = 200_000_000; // 200 MB
 });
 
-// Registrar RoomManager como Singleton
+// Registrar RoomManager y NotificationManager como Singleton
 builder.Services.AddSingleton<RoomManager>();
+builder.Services.AddSingleton<NotificationManager>();
 
 // Add database context
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
@@ -54,6 +56,7 @@ builder.Services.AddDbContext<WatchPartyDbContext>(options =>
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<FriendService>();
 builder.Services.AddScoped<RoomService>();
+builder.Services.AddScoped<SoapRequestHandler>();
 
 // Add JWT Authentication
 var jwtSecret = builder.Configuration["JWT_SECRET"] ?? Environment.GetEnvironmentVariable("JWT_SECRET") ?? "your-super-secret-key-change-in-production-min-32-chars";
@@ -187,6 +190,7 @@ Directory.CreateDirectory(videoStorageRoot);
 
 roomManager.OnRoomRemoved = removedRoomId =>
 {
+    // Cleanup video files
     try
     {
         var roomDir = Path.Combine(videoStorageRoot, removedRoomId);
@@ -199,234 +203,25 @@ roomManager.OnRoomRemoved = removedRoomId =>
     {
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Video cleanup failed for room {removedRoomId}: {ex.Message}");
     }
+
+    // Deactivate room in database
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            using var scope = app.Services.CreateScope();
+            var roomService = scope.ServiceProvider.GetRequiredService<RoomService>();
+            await roomService.DeactivateRoomAsync(removedRoomId);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Database deactivation failed for room {removedRoomId}: {ex.Message}");
+        }
+    });
 };
 
-app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
-
-// Helper method to extract user ID from claims
-static bool TryGetUserId(HttpContext context, out int userId)
-{
-    userId = 0;
-    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
-    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out userId))
-    {
-        return false;
-    }
-    return true;
-}
-
-// ============================================================
-// AUTHENTICATION ENDPOINTS
-// ============================================================
-app.MapPost("/api/auth/register", async (HttpContext context, AuthService authService) =>
-{
-    var body = await context.Request.ReadFromJsonAsync<Dictionary<string, string>>();
-    if (body == null)
-    {
-        return Results.BadRequest(new { error = "Invalid request body" });
-    }
-
-    body.TryGetValue("username", out var username);
-    body.TryGetValue("email", out var email);
-    body.TryGetValue("password", out var password);
-
-    var (success, token, error, userId) = await authService.RegisterAsync(username!, email!, password!);
-
-    if (!success)
-    {
-        return Results.BadRequest(new { error });
-    }
-
-    return Results.Ok(new { token, userId, username, email });
-});
-
-app.MapPost("/api/auth/login", async (HttpContext context, AuthService authService) =>
-{
-    var body = await context.Request.ReadFromJsonAsync<Dictionary<string, string>>();
-    if (body == null)
-    {
-        return Results.BadRequest(new { error = "Invalid request body" });
-    }
-
-    body.TryGetValue("email", out var email);
-    body.TryGetValue("password", out var password);
-
-    var (success, token, error, userId) = await authService.LoginAsync(email!, password!);
-
-    if (!success)
-    {
-        return Results.BadRequest(new { error });
-    }
-
-    var user = await authService.GetUserByIdAsync(userId!.Value);
-    return Results.Ok(new { token, userId, username = user?.Username, email = user?.Email });
-});
-
-app.MapGet("/api/auth/me", async (HttpContext context, AuthService authService) =>
-{
-    if (!TryGetUserId(context, out var userId))
-    {
-        return Results.Unauthorized();
-    }
-
-    var user = await authService.GetUserByIdAsync(userId);
-    if (user == null)
-    {
-        return Results.NotFound(new { error = "User not found" });
-    }
-
-    return Results.Ok(new { id = user.Id, username = user.Username, email = user.Email });
-}).RequireAuthorization();
-
-// ============================================================
-// FRIEND ENDPOINTS
-// ============================================================
-app.MapPost("/api/friends/request", async (HttpContext context, FriendService friendService) =>
-{
-    if (!TryGetUserId(context, out var userId))
-    {
-        return Results.Unauthorized();
-    }
-
-    var body = await context.Request.ReadFromJsonAsync<Dictionary<string, string>>();
-    if (body == null || !body.TryGetValue("email", out var friendEmail))
-    {
-        return Results.BadRequest(new { error = "Friend email is required" });
-    }
-
-    var (success, error) = await friendService.SendFriendRequestAsync(userId, friendEmail);
-    if (!success)
-    {
-        return Results.BadRequest(new { error });
-    }
-
-    return Results.Ok(new { message = "Friend request sent" });
-}).RequireAuthorization();
-
-app.MapPost("/api/friends/accept/{requestId}", async (int requestId, HttpContext context, FriendService friendService) =>
-{
-    if (!TryGetUserId(context, out var userId))
-    {
-        return Results.Unauthorized();
-    }
-
-    var (success, error) = await friendService.AcceptFriendRequestAsync(userId, requestId);
-    if (!success)
-    {
-        return Results.BadRequest(new { error });
-    }
-
-    return Results.Ok(new { message = "Friend request accepted" });
-}).RequireAuthorization();
-
-app.MapPost("/api/friends/reject/{requestId}", async (int requestId, HttpContext context, FriendService friendService) =>
-{
-    if (!TryGetUserId(context, out var userId))
-    {
-        return Results.Unauthorized();
-    }
-
-    var (success, error) = await friendService.RejectFriendRequestAsync(userId, requestId);
-    if (!success)
-    {
-        return Results.BadRequest(new { error });
-    }
-
-    return Results.Ok(new { message = "Friend request rejected" });
-}).RequireAuthorization();
-
-app.MapGet("/api/friends", async (HttpContext context, FriendService friendService) =>
-{
-    if (!TryGetUserId(context, out var userId))
-    {
-        return Results.Unauthorized();
-    }
-
-    var friends = await friendService.GetFriendsAsync(userId);
-    return Results.Ok(new { friends });
-}).RequireAuthorization();
-
-app.MapGet("/api/friends/requests", async (HttpContext context, FriendService friendService) =>
-{
-    if (!TryGetUserId(context, out var userId))
-    {
-        return Results.Unauthorized();
-    }
-
-    var requests = await friendService.GetPendingFriendRequestsAsync(userId);
-    return Results.Ok(new { requests });
-}).RequireAuthorization();
-
-// ============================================================
-// ROOM ENDPOINTS
-// ============================================================
-app.MapPost("/api/rooms/create", async (HttpContext context, RoomService roomService) =>
-{
-    if (!TryGetUserId(context, out var userId))
-    {
-        return Results.Unauthorized();
-    }
-
-    var body = await context.Request.ReadFromJsonAsync<Dictionary<string, string>>();
-    if (body == null)
-    {
-        return Results.BadRequest(new { error = "Invalid request body" });
-    }
-
-    body.TryGetValue("name", out var name);
-    body.TryGetValue("visibility", out var visibility);
-
-    if (string.IsNullOrWhiteSpace(name))
-    {
-        name = "My Room";
-    }
-
-    if (string.IsNullOrWhiteSpace(visibility))
-    {
-        visibility = "Private";
-    }
-
-    var (success, roomCode, error) = await roomService.CreateRoomAsync(userId, name, visibility);
-    if (!success)
-    {
-        return Results.BadRequest(new { error });
-    }
-
-    return Results.Ok(new { roomCode, name, visibility });
-}).RequireAuthorization();
-
-app.MapGet("/api/rooms/public", async (RoomService roomService) =>
-{
-    var rooms = await roomService.GetPublicRoomsAsync();
-    return Results.Ok(new { rooms });
-});
-
-app.MapGet("/api/rooms/friends", async (HttpContext context, RoomService roomService) =>
-{
-    if (!TryGetUserId(context, out var userId))
-    {
-        return Results.Unauthorized();
-    }
-
-    var rooms = await roomService.GetFriendRoomsAsync(userId);
-    return Results.Ok(new { rooms });
-}).RequireAuthorization();
-
-app.MapGet("/api/rooms/{roomCode}/can-join", async (string roomCode, HttpContext context, RoomService roomService) =>
-{
-    if (!TryGetUserId(context, out var userId))
-    {
-        return Results.Unauthorized();
-    }
-
-    var (canJoin, error) = await roomService.CanUserJoinRoomAsync(userId, roomCode);
-    if (!canJoin)
-    {
-        return Results.BadRequest(new { canJoin = false, error });
-    }
-
-    return Results.Ok(new { canJoin = true });
-}).RequireAuthorization();
+app.MapPost("/soap", async (HttpContext context, SoapRequestHandler soapHandler) =>
+    await soapHandler.HandleAsync(context));
 
 static bool IsValidId(string value, int maxLength = 64)
 {
@@ -1117,36 +912,88 @@ app.MapGet("/videos/{roomId}", (string roomId) =>
 });
 
 // ============================================================
-// ENDPOINT para obtener el estado actual de una sala
+// WEBSOCKET ENDPOINT - Notificaciones globales
 // ============================================================
-app.MapGet("/room/{roomId}/state", (string roomId) =>
+app.Map("/notifications/ws", async (HttpContext context) =>
 {
-    if (!IsValidId(roomId))
+    if (!context.WebSockets.IsWebSocketRequest)
     {
-        return Results.BadRequest(new { error = "Invalid room id" });
+        context.Response.StatusCode = 400;
+        return;
     }
 
-    var videoState = roomManager.GetVideoState(roomId);
-    var users = roomManager.GetRoomUsers(roomId);
-
-    if (videoState == null)
+    // Obtener token del query parameter
+    var token = context.Request.Query["token"].ToString();
+    if (string.IsNullOrWhiteSpace(token))
     {
-        return Results.NotFound(new { error = "Room not found" });
+        context.Response.StatusCode = 401;
+        await context.Response.WriteAsync("Unauthorized: Token required");
+        return;
     }
 
-    var usersList = users.Select(u => new
+    // Validar el token JWT manualmente
+    var tokenHandler = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler();
+    var validationParameters = new TokenValidationParameters
     {
-        userId = u.Key,
-        username = u.Value,
-        isHost = roomManager.IsHost(roomId, u.Key)
-    }).ToList();
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(key),
+        ValidateIssuer = true,
+        ValidIssuer = "WatchPartyBackend",
+        ValidateAudience = true,
+        ValidAudience = "WatchPartyFrontend",
+        ValidateLifetime = true,
+        ClockSkew = TimeSpan.Zero
+    };
 
-    return Results.Ok(new
+    try
     {
-        roomId = roomId,
-        videoState = videoState,
-        users = usersList
-    });
+        var principal = tokenHandler.ValidateToken(token, validationParameters, out _);
+        var userIdClaim = principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+        
+        if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+        {
+            context.Response.StatusCode = 401;
+            await context.Response.WriteAsync("Unauthorized: Invalid user ID");
+            return;
+        }
+
+        var notificationManager = context.RequestServices.GetRequiredService<NotificationManager>();
+        var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+
+        await notificationManager.AddConnection(userId, webSocket);
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] User {userId} connected to notifications");
+
+        // Mantener la conexión abierta
+        try
+        {
+            var buffer = new byte[1024 * 4];
+            while (webSocket.State == WebSocketState.Open)
+            {
+                var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                    break;
+                }
+            }
+        }
+        catch (WebSocketException)
+        {
+            // Connection closed unexpectedly
+        }
+        finally
+        {
+            notificationManager.RemoveConnection(userId);
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] User {userId} disconnected from notifications");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Token validation failed: {ex.Message}");
+        context.Response.StatusCode = 401;
+        await context.Response.WriteAsync("Unauthorized: Invalid token");
+    }
 });
 
 var spaIndexPath = Path.Combine(app.Environment.WebRootPath ?? app.Environment.ContentRootPath, "index.html");

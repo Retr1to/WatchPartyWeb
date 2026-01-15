@@ -101,12 +101,12 @@ export class SocketService {
       const wsProtocol = protocol === 'https:' ? 'wss' : 'ws';
 
       if ((hostname === 'localhost' || hostname === '127.0.0.1') && (port === '4200' || port === '')) {
-        return 'wss://localhost:7186';
+        return 'ws://localhost:5232';
       }
 
       return `${wsProtocol}://${host}`;
     } catch {
-      return 'wss://localhost:7186';
+      return 'ws://localhost:5232';
     }
   }
 

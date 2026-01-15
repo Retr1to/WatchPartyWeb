@@ -44,7 +44,7 @@ export class RegisterComponent {
         this.router.navigate(['/']);
       },
       error: (err) => {
-        this.error = err.error?.error || 'Registration failed. Please try again.';
+        this.error = err?.message || err?.error?.error || 'Registration failed. Please try again.';
         this.loading = false;
       }
     });

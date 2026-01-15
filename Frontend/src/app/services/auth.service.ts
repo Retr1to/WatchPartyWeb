@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { BehaviorSubject, Observable, tap } from 'rxjs';
+import { BehaviorSubject, Observable, tap, map } from 'rxjs';
+import { SoapService } from './soap.service';
 
 export interface User {
   id: number;
@@ -19,11 +19,10 @@ export interface AuthResponse {
   providedIn: 'root'
 })
 export class AuthService {
-  private apiUrl = 'http://localhost:5000/api'; // Update with your backend URL
   private currentUserSubject = new BehaviorSubject<User | null>(null);
   public currentUser$ = this.currentUserSubject.asObservable();
 
-  constructor(private http: HttpClient) {
+  constructor(private soap: SoapService) {
     // Check if user is already logged in
     const token = this.getToken();
     if (token) {
@@ -32,11 +31,27 @@ export class AuthService {
   }
 
   register(username: string, email: string, password: string): Observable<AuthResponse> {
-    return this.http.post<AuthResponse>(`${this.apiUrl}/auth/register`, {
-      username,
-      email,
-      password
-    }).pipe(
+    const body = this.soap.buildElements({
+      Username: username,
+      Email: email,
+      Password: password
+    });
+
+    return this.soap.call('Register', body).pipe(
+      map((response) => {
+        const success = this.soap.getBoolean(response, 'Success');
+        const error = this.soap.getText(response, 'Error');
+        if (!success) {
+          throw new Error(error || 'Registration failed');
+        }
+
+        return {
+          token: this.soap.getText(response, 'Token'),
+          userId: this.soap.getNumber(response, 'UserId'),
+          username: this.soap.getText(response, 'Username') || username,
+          email: this.soap.getText(response, 'Email') || email
+        };
+      }),
       tap(response => {
         this.setToken(response.token);
         this.currentUserSubject.next({
@@ -49,10 +64,26 @@ export class AuthService {
   }
 
   login(email: string, password: string): Observable<AuthResponse> {
-    return this.http.post<AuthResponse>(`${this.apiUrl}/auth/login`, {
-      email,
-      password
-    }).pipe(
+    const body = this.soap.buildElements({
+      Email: email,
+      Password: password
+    });
+
+    return this.soap.call('Login', body).pipe(
+      map((response) => {
+        const success = this.soap.getBoolean(response, 'Success');
+        const error = this.soap.getText(response, 'Error');
+        if (!success) {
+          throw new Error(error || 'Login failed');
+        }
+
+        return {
+          token: this.soap.getText(response, 'Token'),
+          userId: this.soap.getNumber(response, 'UserId'),
+          username: this.soap.getText(response, 'Username'),
+          email: this.soap.getText(response, 'Email')
+        };
+      }),
       tap(response => {
         this.setToken(response.token);
         this.currentUserSubject.next({
@@ -86,7 +117,20 @@ export class AuthService {
   }
 
   private loadCurrentUser(): void {
-    this.http.get<User>(`${this.apiUrl}/auth/me`).subscribe({
+    this.soap.call('GetCurrentUser', '').pipe(
+      map((response) => {
+        const success = this.soap.getBoolean(response, 'Success');
+        if (!success) {
+          throw new Error(this.soap.getText(response, 'Error') || 'Unauthorized');
+        }
+
+        return {
+          id: this.soap.getNumber(response, 'Id'),
+          username: this.soap.getText(response, 'Username'),
+          email: this.soap.getText(response, 'Email')
+        } as User;
+      })
+    ).subscribe({
       next: (user) => {
         this.currentUserSubject.next(user);
       },

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using WatchPartyBackend.Contracts;
 using WatchPartyBackend.Models;
 
 namespace WatchPartyBackend.Services
@@ -6,16 +7,24 @@ namespace WatchPartyBackend.Services
     public class FriendService
     {
         private readonly WatchPartyDbContext _context;
+        private readonly NotificationManager _notificationManager;
 
-        public FriendService(WatchPartyDbContext context)
+        public FriendService(WatchPartyDbContext context, NotificationManager notificationManager)
         {
             _context = context;
+            _notificationManager = notificationManager;
         }
 
         public async Task<(bool Success, string? Error)> SendFriendRequestAsync(int userId, string friendEmail)
         {
             // Find friend by email
-            var friendUser = await _context.Users.FirstOrDefaultAsync(u => u.Email == friendEmail);
+            var normalizedEmail = NormalizeEmail(friendEmail);
+            if (string.IsNullOrWhiteSpace(normalizedEmail))
+            {
+                return (false, "Friend email is required");
+            }
+
+            var friendUser = await _context.Users.FirstOrDefaultAsync(u => u.Email.ToLower() == normalizedEmail);
             if (friendUser == null)
             {
                 return (false, "User not found");
@@ -53,6 +62,34 @@ namespace WatchPartyBackend.Services
             _context.Friends.Add(friendRequest);
             await _context.SaveChangesAsync();
 
+            // Enviar notificación en tiempo real al destinatario
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var sender = await _context.Users.FindAsync(userId);
+                    await _notificationManager.SendToUser(friendUser.Id, new WebSocketMessage
+                    {
+                        Type = "friend_request_received",
+                        Data = new
+                        {
+                            requestId = friendRequest.Id,
+                            from = new
+                            {
+                                id = sender!.Id,
+                                username = sender.Username,
+                                email = sender.Email
+                            },
+                            createdAt = friendRequest.CreatedAt
+                        }
+                    });
+                }
+                catch
+                {
+                    // Ignore notification errors
+                }
+            });
+
             return (true, null);
         }
 
@@ -69,6 +106,32 @@ namespace WatchPartyBackend.Services
             friendRequest.Status = "Accepted";
             friendRequest.AcceptedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
+
+            // Enviar notificación al usuario que envió la solicitud
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var accepter = await _context.Users.FindAsync(userId);
+                    await _notificationManager.SendToUser(friendRequest.UserId, new WebSocketMessage
+                    {
+                        Type = "friend_request_accepted",
+                        Data = new
+                        {
+                            friend = new
+                            {
+                                id = accepter!.Id,
+                                username = accepter.Username,
+                                email = accepter.Email
+                            }
+                        }
+                    });
+                }
+                catch
+                {
+                    // Ignore notification errors
+                }
+            });
 
             return (true, null);
         }
@@ -89,7 +152,7 @@ namespace WatchPartyBackend.Services
             return (true, null);
         }
 
-        public async Task<List<object>> GetFriendsAsync(int userId)
+        public async Task<List<UserSummary>> GetFriendsAsync(int userId)
         {
             var friends = await _context.Friends
                 .Where(f => (f.UserId == userId || f.FriendUserId == userId) && f.Status == "Accepted")
@@ -100,33 +163,33 @@ namespace WatchPartyBackend.Services
             return friends.Select(f =>
             {
                 var friend = f.UserId == userId ? f.FriendUser : f.User;
-                return new
+                return new UserSummary
                 {
-                    id = friend.Id,
-                    username = friend.Username,
-                    email = friend.Email
+                    Id = friend.Id,
+                    Username = friend.Username,
+                    Email = friend.Email
                 };
-            }).Cast<object>().ToList();
+            }).ToList();
         }
 
-        public async Task<List<object>> GetPendingFriendRequestsAsync(int userId)
+        public async Task<List<FriendRequestSummary>> GetPendingFriendRequestsAsync(int userId)
         {
             var pendingRequests = await _context.Friends
                 .Where(f => f.FriendUserId == userId && f.Status == "Pending")
                 .Include(f => f.User)
                 .ToListAsync();
 
-            return pendingRequests.Select(f => new
+            return pendingRequests.Select(f => new FriendRequestSummary
             {
-                id = f.Id,
-                from = new
+                Id = f.Id,
+                From = new UserSummary
                 {
-                    id = f.User.Id,
-                    username = f.User.Username,
-                    email = f.User.Email
+                    Id = f.User.Id,
+                    Username = f.User.Username,
+                    Email = f.User.Email
                 },
-                createdAt = f.CreatedAt
-            }).Cast<object>().ToList();
+                CreatedAt = f.CreatedAt
+            }).ToList();
         }
 
         public async Task<bool> AreFriendsAsync(int userId1, int userId2)
@@ -136,6 +199,11 @@ namespace WatchPartyBackend.Services
                     ((f.UserId == userId1 && f.FriendUserId == userId2) ||
                      (f.UserId == userId2 && f.FriendUserId == userId1)) &&
                     f.Status == "Accepted");
+        }
+
+        private static string NormalizeEmail(string email)
+        {
+            return (email ?? string.Empty).Trim().ToLowerInvariant();
         }
     }
 }

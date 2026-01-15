@@ -22,7 +22,10 @@ namespace WatchPartyBackend.Services
         public async Task<(bool Success, string? Token, string? Error, int? UserId)> RegisterAsync(string username, string email, string password)
         {
             // Validate input
-            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+            var normalizedUsername = NormalizeUsername(username);
+            var normalizedEmail = NormalizeEmail(email);
+
+            if (string.IsNullOrWhiteSpace(normalizedUsername) || string.IsNullOrWhiteSpace(normalizedEmail) || string.IsNullOrWhiteSpace(password))
             {
                 return (false, null, "All fields are required", null);
             }
@@ -33,12 +36,12 @@ namespace WatchPartyBackend.Services
             }
 
             // Check if user already exists
-            if (await _context.Users.AnyAsync(u => u.Email == email))
+            if (await _context.Users.AnyAsync(u => u.Email.ToLower() == normalizedEmail))
             {
                 return (false, null, "Email already registered", null);
             }
 
-            if (await _context.Users.AnyAsync(u => u.Username == username))
+            if (await _context.Users.AnyAsync(u => u.Username == normalizedUsername))
             {
                 return (false, null, "Username already taken", null);
             }
@@ -46,8 +49,8 @@ namespace WatchPartyBackend.Services
             // Create new user
             var user = new User
             {
-                Username = username,
-                Email = email,
+                Username = normalizedUsername,
+                Email = normalizedEmail,
                 PasswordHash = HashPassword(password),
                 CreatedAt = DateTime.UtcNow,
                 LastLoginAt = DateTime.UtcNow
@@ -65,13 +68,15 @@ namespace WatchPartyBackend.Services
         public async Task<(bool Success, string? Token, string? Error, int? UserId)> LoginAsync(string email, string password)
         {
             // Validate input
-            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+            var normalizedEmail = NormalizeEmail(email);
+
+            if (string.IsNullOrWhiteSpace(normalizedEmail) || string.IsNullOrWhiteSpace(password))
             {
                 return (false, null, "Email and password are required", null);
             }
 
             // Find user
-            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == email);
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Email.ToLower() == normalizedEmail);
             if (user == null)
             {
                 return (false, null, "Invalid email or password", null);
@@ -100,7 +105,13 @@ namespace WatchPartyBackend.Services
 
         public async Task<User?> GetUserByEmailAsync(string email)
         {
-            return await _context.Users.FirstOrDefaultAsync(u => u.Email == email);
+            var normalizedEmail = NormalizeEmail(email);
+            if (string.IsNullOrWhiteSpace(normalizedEmail))
+            {
+                return null;
+            }
+
+            return await _context.Users.FirstOrDefaultAsync(u => u.Email.ToLower() == normalizedEmail);
         }
 
         private string HashPassword(string password)
@@ -114,6 +125,16 @@ namespace WatchPartyBackend.Services
         {
             var hashOfInput = HashPassword(password);
             return hashOfInput == hash;
+        }
+
+        private static string NormalizeEmail(string email)
+        {
+            return (email ?? string.Empty).Trim().ToLowerInvariant();
+        }
+
+        private static string NormalizeUsername(string username)
+        {
+            return (username ?? string.Empty).Trim();
         }
 
         private string GenerateJwtToken(User user)
