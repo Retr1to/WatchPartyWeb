@@ -158,7 +158,8 @@ export class HomeComponent implements OnInit {
 
     this.userService.createRoom(this.roomName, this.roomVisibility).subscribe({
       next: (response) => {
-        this.socketService.createRoom(username);
+        // Join the created room via WebSocket
+        this.socketService.joinRoom(response.roomCode, username);
         this.closeCreateDialog();
         this.loadUserData();
       },
