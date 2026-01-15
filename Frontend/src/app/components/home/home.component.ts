@@ -33,7 +33,7 @@ export class HomeComponent implements OnInit {
   pendingRequests: FriendRequest[] = [];
   
   roomName: string = '';
-  roomVisibility: string = 'public';
+  roomVisibility: string = 'Public';
   friendEmail: string = '';
 
   constructor(
@@ -244,7 +244,7 @@ export class HomeComponent implements OnInit {
   closeCreateDialog(): void {
     this.showCreateRoomDialog = false;
     this.roomName = '';
-    this.roomVisibility = 'public';
+    this.roomVisibility = 'Public';
   }
 
   closeFriendDialog(): void {
