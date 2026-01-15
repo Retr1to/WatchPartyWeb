@@ -203,6 +203,18 @@ roomManager.OnRoomRemoved = removedRoomId =>
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 
+// Helper method to extract user ID from claims
+static bool TryGetUserId(HttpContext context, out int userId)
+{
+    userId = 0;
+    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out userId))
+    {
+        return false;
+    }
+    return true;
+}
+
 // ============================================================
 // AUTHENTICATION ENDPOINTS
 // ============================================================
@@ -252,8 +264,7 @@ app.MapPost("/api/auth/login", async (HttpContext context, AuthService authServi
 
 app.MapGet("/api/auth/me", async (HttpContext context, AuthService authService) =>
 {
-    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
-    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    if (!TryGetUserId(context, out var userId))
     {
         return Results.Unauthorized();
     }
@@ -272,8 +283,7 @@ app.MapGet("/api/auth/me", async (HttpContext context, AuthService authService) 
 // ============================================================
 app.MapPost("/api/friends/request", async (HttpContext context, FriendService friendService) =>
 {
-    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
-    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    if (!TryGetUserId(context, out var userId))
     {
         return Results.Unauthorized();
     }
@@ -295,8 +305,7 @@ app.MapPost("/api/friends/request", async (HttpContext context, FriendService fr
 
 app.MapPost("/api/friends/accept/{requestId}", async (int requestId, HttpContext context, FriendService friendService) =>
 {
-    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
-    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    if (!TryGetUserId(context, out var userId))
     {
         return Results.Unauthorized();
     }
@@ -312,8 +321,7 @@ app.MapPost("/api/friends/accept/{requestId}", async (int requestId, HttpContext
 
 app.MapPost("/api/friends/reject/{requestId}", async (int requestId, HttpContext context, FriendService friendService) =>
 {
-    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
-    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    if (!TryGetUserId(context, out var userId))
     {
         return Results.Unauthorized();
     }
@@ -329,8 +337,7 @@ app.MapPost("/api/friends/reject/{requestId}", async (int requestId, HttpContext
 
 app.MapGet("/api/friends", async (HttpContext context, FriendService friendService) =>
 {
-    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
-    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    if (!TryGetUserId(context, out var userId))
     {
         return Results.Unauthorized();
     }
@@ -341,8 +348,7 @@ app.MapGet("/api/friends", async (HttpContext context, FriendService friendServi
 
 app.MapGet("/api/friends/requests", async (HttpContext context, FriendService friendService) =>
 {
-    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
-    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    if (!TryGetUserId(context, out var userId))
     {
         return Results.Unauthorized();
     }
@@ -356,8 +362,7 @@ app.MapGet("/api/friends/requests", async (HttpContext context, FriendService fr
 // ============================================================
 app.MapPost("/api/rooms/create", async (HttpContext context, RoomService roomService) =>
 {
-    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
-    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    if (!TryGetUserId(context, out var userId))
     {
         return Results.Unauthorized();
     }
@@ -398,8 +403,7 @@ app.MapGet("/api/rooms/public", async (RoomService roomService) =>
 
 app.MapGet("/api/rooms/friends", async (HttpContext context, RoomService roomService) =>
 {
-    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
-    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    if (!TryGetUserId(context, out var userId))
     {
         return Results.Unauthorized();
     }
@@ -410,8 +414,7 @@ app.MapGet("/api/rooms/friends", async (HttpContext context, RoomService roomSer
 
 app.MapGet("/api/rooms/{roomCode}/can-join", async (string roomCode, HttpContext context, RoomService roomService) =>
 {
-    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
-    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    if (!TryGetUserId(context, out var userId))
     {
         return Results.Unauthorized();
     }
