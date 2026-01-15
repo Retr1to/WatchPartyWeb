@@ -3,6 +3,9 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
 using WatchPartyBackend.Models;
 using WatchPartyBackend.Services;
 
@@ -38,6 +41,47 @@ builder.WebHost.ConfigureKestrel(options =>
 
 // Registrar RoomManager como Singleton
 builder.Services.AddSingleton<RoomManager>();
+
+// Add database context
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
+    ?? Environment.GetEnvironmentVariable("DATABASE_URL") 
+    ?? "Host=localhost;Database=watchparty;Username=postgres;Password=postgres";
+
+builder.Services.AddDbContext<WatchPartyDbContext>(options =>
+    options.UseNpgsql(connectionString));
+
+// Add services
+builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<FriendService>();
+builder.Services.AddScoped<RoomService>();
+
+// Add JWT Authentication
+var jwtSecret = builder.Configuration["JWT_SECRET"] ?? Environment.GetEnvironmentVariable("JWT_SECRET") ?? "your-super-secret-key-change-in-production-min-32-chars";
+var key = Encoding.UTF8.GetBytes(jwtSecret);
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.RequireHttpsMetadata = false;
+    options.SaveToken = true;
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(key),
+        ValidateIssuer = true,
+        ValidIssuer = "WatchPartyBackend",
+        ValidateAudience = true,
+        ValidAudience = "WatchPartyFrontend",
+        ValidateLifetime = true,
+        ClockSkew = TimeSpan.Zero
+    };
+});
+
+builder.Services.AddAuthorization();
 
 var videoStorageRoot = Environment.GetEnvironmentVariable("WATCHPARTY_VIDEO_STORAGE")
     ?? Path.Combine(Path.GetTempPath(), "watchparty_videos");
@@ -125,6 +169,8 @@ if (app.Environment.IsDevelopment())
 app.UseDefaultFiles();
 app.UseStaticFiles(); // ✅ Sirve archivos de wwwroot/
 app.UseCors("AllowFrontend");
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseWebSockets();
 
 var roomManager = app.Services.GetRequiredService<RoomManager>();
@@ -156,6 +202,228 @@ roomManager.OnRoomRemoved = removedRoomId =>
 };
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
+
+// ============================================================
+// AUTHENTICATION ENDPOINTS
+// ============================================================
+app.MapPost("/api/auth/register", async (HttpContext context, AuthService authService) =>
+{
+    var body = await context.Request.ReadFromJsonAsync<Dictionary<string, string>>();
+    if (body == null)
+    {
+        return Results.BadRequest(new { error = "Invalid request body" });
+    }
+
+    body.TryGetValue("username", out var username);
+    body.TryGetValue("email", out var email);
+    body.TryGetValue("password", out var password);
+
+    var (success, token, error, userId) = await authService.RegisterAsync(username!, email!, password!);
+
+    if (!success)
+    {
+        return Results.BadRequest(new { error });
+    }
+
+    return Results.Ok(new { token, userId, username, email });
+});
+
+app.MapPost("/api/auth/login", async (HttpContext context, AuthService authService) =>
+{
+    var body = await context.Request.ReadFromJsonAsync<Dictionary<string, string>>();
+    if (body == null)
+    {
+        return Results.BadRequest(new { error = "Invalid request body" });
+    }
+
+    body.TryGetValue("email", out var email);
+    body.TryGetValue("password", out var password);
+
+    var (success, token, error, userId) = await authService.LoginAsync(email!, password!);
+
+    if (!success)
+    {
+        return Results.BadRequest(new { error });
+    }
+
+    var user = await authService.GetUserByIdAsync(userId!.Value);
+    return Results.Ok(new { token, userId, username = user?.Username, email = user?.Email });
+});
+
+app.MapGet("/api/auth/me", async (HttpContext context, AuthService authService) =>
+{
+    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var user = await authService.GetUserByIdAsync(userId);
+    if (user == null)
+    {
+        return Results.NotFound(new { error = "User not found" });
+    }
+
+    return Results.Ok(new { id = user.Id, username = user.Username, email = user.Email });
+}).RequireAuthorization();
+
+// ============================================================
+// FRIEND ENDPOINTS
+// ============================================================
+app.MapPost("/api/friends/request", async (HttpContext context, FriendService friendService) =>
+{
+    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var body = await context.Request.ReadFromJsonAsync<Dictionary<string, string>>();
+    if (body == null || !body.TryGetValue("email", out var friendEmail))
+    {
+        return Results.BadRequest(new { error = "Friend email is required" });
+    }
+
+    var (success, error) = await friendService.SendFriendRequestAsync(userId, friendEmail);
+    if (!success)
+    {
+        return Results.BadRequest(new { error });
+    }
+
+    return Results.Ok(new { message = "Friend request sent" });
+}).RequireAuthorization();
+
+app.MapPost("/api/friends/accept/{requestId}", async (int requestId, HttpContext context, FriendService friendService) =>
+{
+    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var (success, error) = await friendService.AcceptFriendRequestAsync(userId, requestId);
+    if (!success)
+    {
+        return Results.BadRequest(new { error });
+    }
+
+    return Results.Ok(new { message = "Friend request accepted" });
+}).RequireAuthorization();
+
+app.MapPost("/api/friends/reject/{requestId}", async (int requestId, HttpContext context, FriendService friendService) =>
+{
+    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var (success, error) = await friendService.RejectFriendRequestAsync(userId, requestId);
+    if (!success)
+    {
+        return Results.BadRequest(new { error });
+    }
+
+    return Results.Ok(new { message = "Friend request rejected" });
+}).RequireAuthorization();
+
+app.MapGet("/api/friends", async (HttpContext context, FriendService friendService) =>
+{
+    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var friends = await friendService.GetFriendsAsync(userId);
+    return Results.Ok(new { friends });
+}).RequireAuthorization();
+
+app.MapGet("/api/friends/requests", async (HttpContext context, FriendService friendService) =>
+{
+    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var requests = await friendService.GetPendingFriendRequestsAsync(userId);
+    return Results.Ok(new { requests });
+}).RequireAuthorization();
+
+// ============================================================
+// ROOM ENDPOINTS
+// ============================================================
+app.MapPost("/api/rooms/create", async (HttpContext context, RoomService roomService) =>
+{
+    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var body = await context.Request.ReadFromJsonAsync<Dictionary<string, string>>();
+    if (body == null)
+    {
+        return Results.BadRequest(new { error = "Invalid request body" });
+    }
+
+    body.TryGetValue("name", out var name);
+    body.TryGetValue("visibility", out var visibility);
+
+    if (string.IsNullOrWhiteSpace(name))
+    {
+        name = "My Room";
+    }
+
+    if (string.IsNullOrWhiteSpace(visibility))
+    {
+        visibility = "Private";
+    }
+
+    var (success, roomCode, error) = await roomService.CreateRoomAsync(userId, name, visibility);
+    if (!success)
+    {
+        return Results.BadRequest(new { error });
+    }
+
+    return Results.Ok(new { roomCode, name, visibility });
+}).RequireAuthorization();
+
+app.MapGet("/api/rooms/public", async (RoomService roomService) =>
+{
+    var rooms = await roomService.GetPublicRoomsAsync();
+    return Results.Ok(new { rooms });
+});
+
+app.MapGet("/api/rooms/friends", async (HttpContext context, RoomService roomService) =>
+{
+    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var rooms = await roomService.GetFriendRoomsAsync(userId);
+    return Results.Ok(new { rooms });
+}).RequireAuthorization();
+
+app.MapGet("/api/rooms/{roomCode}/can-join", async (string roomCode, HttpContext context, RoomService roomService) =>
+{
+    var userIdClaim = context.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var (canJoin, error) = await roomService.CanUserJoinRoomAsync(userId, roomCode);
+    if (!canJoin)
+    {
+        return Results.BadRequest(new { canJoin = false, error });
+    }
+
+    return Results.Ok(new { canJoin = true });
+}).RequireAuthorization();
 
 static bool IsValidId(string value, int maxLength = 64)
 {
