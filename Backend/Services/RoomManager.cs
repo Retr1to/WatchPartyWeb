@@ -21,27 +21,19 @@ namespace WatchPartyBackend.Services
             WriteIndented = false
         };
 
-        /// <summary>
-        /// Obtiene o crea una sala
-        /// </summary>
         public Room GetOrCreateRoom(string roomId, string userId)
         {
             return _rooms.GetOrAdd(roomId, _ => new Room
             {
                 RoomId = roomId,
-                HostId = userId // El primero en entrar es el host
+                HostId = userId
             });
         }
 
-        /// <summary>
-        /// Agrega una conexión a una sala
-        /// </summary>
-        public async Task<string> AddConnection(string roomId, string userId, string sessionKey, WebSocket webSocket, string username = "")
+        public async Task<string> AddConnection(string roomId, string userId, string sessionKey, WebSocket webSocket, string username = "") 
         {
             var room = GetOrCreateRoom(roomId, userId);
-            
-            // If a client reconnects with the same (userId, sessionKey), replace the old socket to avoid
-            // leaving multiple active WebSocket connections for the same logical session.
+
             if (string.IsNullOrWhiteSpace(sessionKey))
             {
                 sessionKey = Guid.NewGuid().ToString("N");
@@ -74,7 +66,6 @@ namespace WatchPartyBackend.Services
             room.Connections.AddOrUpdate(effectiveUserId, webSocket, (_, _) => webSocket);
             room.SessionKeys.AddOrUpdate(effectiveUserId, sessionKey, (_, _) => sessionKey);
 
-            // ✅ Guardar username
             if (!string.IsNullOrEmpty(username))
             {
                 room.Usernames.AddOrUpdate(effectiveUserId, username, (_, _) => username);
@@ -83,9 +74,6 @@ namespace WatchPartyBackend.Services
             return effectiveUserId;
         }
 
-        /// <summary>
-        /// Remueve una conexión de una sala
-        /// </summary>
         public bool RoomExists(string roomId)
         {
             return _rooms.ContainsKey(roomId);
@@ -99,8 +87,6 @@ namespace WatchPartyBackend.Services
 
             if (!room.Connections.ContainsKey(userId)) return false;
 
-            // If the userId is currently connected but the stored session key doesn't match,
-            // treat it as a conflict (potential hijack / duplicate identity).
             if (!room.SessionKeys.TryGetValue(userId, out var existingSessionKey)) return true;
             return !string.Equals(existingSessionKey, sessionKey, StringComparison.Ordinal);
         }
@@ -129,7 +115,6 @@ namespace WatchPartyBackend.Services
                 room.Usernames.TryRemove(userId, out _);
                 room.SessionKeys.TryRemove(userId, out _);
 
-                // Si la sala queda vacía, eliminarla
                 if (room.Connections.IsEmpty)
                 {
                     if (_rooms.TryRemove(roomId, out _))
@@ -164,9 +149,6 @@ namespace WatchPartyBackend.Services
             return true;
         }
 
-        /// <summary>
-        /// Verifica si un usuario es el host de una sala
-        /// </summary>
         public bool IsHost(string roomId, string userId)
         {
             return _rooms.TryGetValue(roomId, out var room) && room.HostId == userId;
@@ -180,9 +162,6 @@ namespace WatchPartyBackend.Services
                    string.Equals(existing, sessionKey, StringComparison.Ordinal);
         }
 
-        /// <summary>
-        /// Actualiza el estado del video en una sala
-        /// </summary>
         public void UpdateVideoState(string roomId, VideoState newState)
         {
             if (_rooms.TryGetValue(roomId, out var room))
@@ -192,17 +171,11 @@ namespace WatchPartyBackend.Services
             }
         }
 
-        /// <summary>
-        /// Obtiene el estado actual del video en una sala
-        /// </summary>
         public VideoState? GetVideoState(string roomId)
         {
             return _rooms.TryGetValue(roomId, out var room) ? room.VideoState : null;
         }
 
-        /// <summary>
-        /// Obtiene la lista de usuarios conectados con sus nombres
-        /// </summary>
         public Dictionary<string, string> GetRoomUsers(string roomId)
         {
             if (!_rooms.TryGetValue(roomId, out var room))
@@ -213,9 +186,6 @@ namespace WatchPartyBackend.Services
             return new Dictionary<string, string>(room.Usernames);
         }
 
-        /// <summary>
-        /// Envía un mensaje a todos los usuarios de una sala
-        /// </summary>
         public async Task BroadcastToRoom(string roomId, WebSocketMessage message, string? excludeUserId = null)
         {
             if (!_rooms.TryGetValue(roomId, out var room)) return;
@@ -228,18 +198,13 @@ namespace WatchPartyBackend.Services
 
             foreach (var (userId, socket) in room.Connections)
             {
-                // No enviar al usuario excluido (por ejemplo, el que originó el mensaje)
                 if (userId == excludeUserId) continue;
-
                 tasks.Add(TrySendAsync(roomId, userId, socket, payload));
             }
 
             await Task.WhenAll(tasks);
         }
 
-        /// <summary>
-        /// Envía un mensaje a un usuario específico
-        /// </summary>
         public async Task SendToUser(string roomId, string userId, WebSocketMessage message)
         {
             if (!_rooms.TryGetValue(roomId, out var room)) return;
@@ -268,9 +233,6 @@ namespace WatchPartyBackend.Services
             }
         }
 
-        /// <summary>
-        /// Safely closes a WebSocket connection to prevent resource leaks
-        /// </summary>
         private async Task CloseWebSocketSafely(WebSocket? socket, CancellationToken cancellationToken = default)
         {
             if (socket == null) return;
@@ -283,45 +245,27 @@ namespace WatchPartyBackend.Services
                 {
                     await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Connection replaced", cancellationToken);
                 }
-                catch (OperationCanceledException)
-                {
-                    // Ignore cancellation exceptions
-                }
-                catch (ObjectDisposedException)
-                {
-                    // Socket already disposed, nothing to do
-                }
-                catch (WebSocketException)
-                {
-                    // WebSocket is in a bad state, will dispose below
-                }
+                catch (OperationCanceledException) { }
+                catch (ObjectDisposedException) { }
+                catch (WebSocketException) { }
             }
 
             try
             {
                 socket.Dispose();
             }
-            catch (ObjectDisposedException)
-            {
-                // Socket already disposed, nothing to do
-            }
+            catch (ObjectDisposedException) { }
         }
 
         // ============================================================
-        // QUEUE MANAGEMENT METHODS
+        // VIDEO QUEUE MANAGEMENT (usando VideoQueue del compañero)
         // ============================================================
 
-        /// <summary>
-        /// Obtiene la cola de videos de una sala
-        /// </summary>
         public VideoQueue? GetQueue(string roomId)
         {
             return _rooms.TryGetValue(roomId, out var room) ? room.Queue : null;
         }
 
-        /// <summary>
-        /// Agrega un item a la cola de videos
-        /// </summary>
         public bool AddToQueue(string roomId, QueueItem item)
         {
             if (!_rooms.TryGetValue(roomId, out var room)) return false;
@@ -329,27 +273,18 @@ namespace WatchPartyBackend.Services
             return true;
         }
 
-        /// <summary>
-        /// Remueve un item de la cola de videos
-        /// </summary>
         public bool RemoveFromQueue(string roomId, string itemId)
         {
             if (!_rooms.TryGetValue(roomId, out var room)) return false;
             return room.Queue.RemoveItem(itemId);
         }
 
-        /// <summary>
-        /// Reordena la cola de videos
-        /// </summary>
         public bool ReorderQueue(string roomId, List<string> itemIds)
         {
             if (!_rooms.TryGetValue(roomId, out var room)) return false;
             return room.Queue.Reorder(itemIds);
         }
 
-        /// <summary>
-        /// Actualiza la configuración de auto-advance de la cola
-        /// </summary>
         public bool UpdateQueueSettings(string roomId, bool autoAdvance)
         {
             if (!_rooms.TryGetValue(roomId, out var room)) return false;
@@ -357,27 +292,18 @@ namespace WatchPartyBackend.Services
             return true;
         }
 
-        /// <summary>
-        /// Avanza la cola al siguiente video
-        /// </summary>
         public QueueItem? AdvanceQueue(string roomId)
         {
             if (!_rooms.TryGetValue(roomId, out var room)) return null;
             return room.Queue.AdvanceToNext();
         }
 
-        /// <summary>
-        /// Avanza la cola a un item específico
-        /// </summary>
         public QueueItem? AdvanceQueueToItem(string roomId, string itemId)
         {
             if (!_rooms.TryGetValue(roomId, out var room)) return null;
             return room.Queue.AdvanceToItem(itemId);
         }
 
-        /// <summary>
-        /// Obtiene todas las salas con items programados que deben reproducirse
-        /// </summary>
         public List<(string RoomId, QueueItem Item)> GetScheduledItemsDue()
         {
             var result = new List<(string, QueueItem)>();
@@ -392,12 +318,84 @@ namespace WatchPartyBackend.Services
             return result;
         }
 
-        /// <summary>
-        /// Obtiene los IDs de todas las salas activas
-        /// </summary>
         public IEnumerable<string> GetAllRoomIds()
         {
             return _rooms.Keys.ToList();
+        }
+
+        // ============================================================
+        // ✅ SCHEDULED VIDEOS (nueva funcionalidad)
+        // ============================================================
+
+        public List<ScheduledVideo>? GetScheduledVideos(string roomId)
+        {
+            if (!_rooms.TryGetValue(roomId, out var room))
+            {
+                return null;
+            }
+
+            return room.ScheduledVideos
+                .Where(v => !v.IsPlayed && !v.IsCancelled)
+                .OrderBy(v => v.ScheduledTime)
+                .ToList();
+        }
+
+        public bool AddScheduledVideo(string roomId, ScheduledVideo video)
+        {
+            if (!_rooms.TryGetValue(roomId, out var room))
+            {
+                return false;
+            }
+
+            room.ScheduledVideos.Add(video);
+            return true;
+        }
+
+        public bool CancelScheduledVideo(string roomId, string scheduledId)
+        {
+            if (!_rooms.TryGetValue(roomId, out var room))
+            {
+                return false;
+            }
+
+            var video = room.ScheduledVideos.FirstOrDefault(v => v.Id == scheduledId);
+            if (video == null)
+            {
+                return false;
+            }
+
+            video.IsCancelled = true;
+            return true;
+        }
+
+        public ScheduledVideo? GetNextScheduledVideo(string roomId)
+        {
+            if (!_rooms.TryGetValue(roomId, out var room))
+            {
+                return null;
+            }
+
+            return room.ScheduledVideos
+                .Where(v => !v.IsPlayed && !v.IsCancelled && v.ScheduledTime <= DateTime.UtcNow)
+                .OrderBy(v => v.ScheduledTime)
+                .FirstOrDefault();
+        }
+
+        public bool MarkScheduledAsPlayed(string roomId, string scheduledId)
+        {
+            if (!_rooms.TryGetValue(roomId, out var room))
+            {
+                return false;
+            }
+
+            var video = room.ScheduledVideos.FirstOrDefault(v => v.Id == scheduledId);
+            if (video == null)
+            {
+                return false;
+            }
+
+            video.IsPlayed = true;
+            return true;
         }
     }
 }
