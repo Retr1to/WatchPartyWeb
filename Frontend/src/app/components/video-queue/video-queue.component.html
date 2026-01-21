@@ -1,0 +1,170 @@
+<div class="video-queue">
+  <div class="queue-header">
+    <div class="header-title">
+      <span class="section-icon">📋</span>
+      <span>Cola de Videos ({{ queueItems.length }})</span>
+    </div>
+    <div class="header-actions" *ngIf="isHost">
+      <button
+        class="btn btn-sm"
+        [class.btn-active]="autoAdvance"
+        (click)="toggleAutoAdvance()"
+        title="Reproducción automática"
+      >
+        {{ autoAdvance ? '⏭️ Auto' : '⏸️ Manual' }}
+      </button>
+      <button
+        class="btn btn-sm btn-primary"
+        (click)="skipToNext()"
+        [disabled]="currentIndex >= queueItems.length - 1"
+        title="Saltar al siguiente video"
+      >
+        ⏭️ Skip
+      </button>
+    </div>
+  </div>
+
+  <div class="queue-list" *ngIf="queueItems.length > 0">
+    <div
+      *ngFor="let item of queueItems; let i = index"
+      class="queue-item"
+      [class.current]="isCurrentItem(item)"
+      [class.played]="item.position < currentIndex"
+      [class.dragging]="draggedItemId === item.itemId"
+      [draggable]="isHost"
+      (dragstart)="onDragStart($event, item.itemId)"
+      (dragover)="onDragOver($event)"
+      (drop)="onDrop($event, item.itemId)"
+      (dragend)="onDragEnd()"
+    >
+      <div class="item-position">
+        <span *ngIf="isCurrentItem(item)" class="now-playing">▶</span>
+        <span *ngIf="!isCurrentItem(item)">{{ item.position + 1 }}</span>
+      </div>
+
+      <div class="item-content">
+        <div class="item-title">{{ getDisplayTitle(item) }}</div>
+        <div class="item-meta">
+          <span class="provider-badge" [class]="item.provider">
+            {{ item.provider === 'youtube' ? 'YouTube' : item.provider === 'file' ? 'Archivo' : 'URL' }}
+          </span>
+          <span class="schedule" *ngIf="item.scheduleType !== 'none'">
+            {{ formatSchedule(item) }}
+          </span>
+        </div>
+      </div>
+
+      <div class="item-actions" *ngIf="isHost">
+        <button
+          class="btn-icon"
+          (click)="removeFromQueue(item.itemId)"
+          title="Eliminar de la cola"
+        >
+          🗑️
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="queue-empty" *ngIf="queueItems.length === 0 && !isLoading">
+    <p>La cola está vacía</p>
+    <p class="hint" *ngIf="isHost">Agrega videos para crear una lista de reproducción</p>
+  </div>
+
+  <div class="queue-loading" *ngIf="isLoading">
+    <div class="spinner-small"></div>
+    <span>Cargando cola...</span>
+  </div>
+
+  <!-- Add to queue form -->
+  <div class="add-form" *ngIf="isHost">
+    <button
+      class="btn btn-add"
+      *ngIf="!showAddForm"
+      (click)="toggleAddForm()"
+    >
+      ➕ Agregar a la cola
+    </button>
+
+    <div class="form-container" *ngIf="showAddForm">
+      <div class="form-group">
+        <label>URL del video</label>
+        <input
+          type="text"
+          [(ngModel)]="newVideoUrl"
+          placeholder="YouTube o enlace directo (.mp4, .webm, etc.)"
+          (keyup.enter)="addToQueue()"
+        />
+      </div>
+
+      <div class="form-group">
+        <label>Título (opcional)</label>
+        <input
+          type="text"
+          [(ngModel)]="newVideoTitle"
+          placeholder="Nombre para mostrar en la cola"
+        />
+      </div>
+
+      <div class="form-group">
+        <label>Planificación</label>
+        <select [(ngModel)]="scheduleType">
+          <option value="none">Sin planificación</option>
+          <option value="absolute">Fecha/hora específica</option>
+          <option value="relative_time">En X minutos</option>
+          <option value="relative_videos">Después de X videos</option>
+        </select>
+      </div>
+
+      <div class="schedule-options" *ngIf="scheduleType === 'absolute'">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Fecha</label>
+            <input type="date" [(ngModel)]="scheduledDate" />
+          </div>
+          <div class="form-group">
+            <label>Hora</label>
+            <input type="time" [(ngModel)]="scheduledTime" />
+          </div>
+        </div>
+      </div>
+
+      <div class="schedule-options" *ngIf="scheduleType === 'relative_time'">
+        <div class="form-group">
+          <label>Minutos desde ahora</label>
+          <input
+            type="number"
+            [(ngModel)]="relativeMinutes"
+            min="1"
+            max="1440"
+          />
+        </div>
+      </div>
+
+      <div class="schedule-options" *ngIf="scheduleType === 'relative_videos'">
+        <div class="form-group">
+          <label>Cantidad de videos</label>
+          <input
+            type="number"
+            [(ngModel)]="relativeVideoCount"
+            min="1"
+            max="100"
+          />
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-secondary" (click)="toggleAddForm()">
+          Cancelar
+        </button>
+        <button
+          class="btn btn-primary"
+          (click)="addToQueue()"
+          [disabled]="isLoading || !newVideoUrl.trim()"
+        >
+          {{ isLoading ? 'Agregando...' : 'Agregar' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

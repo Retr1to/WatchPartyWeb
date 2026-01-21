@@ -16,6 +16,28 @@ export interface VideoState {
   videoId?: string;
 }
 
+export interface QueueItem {
+  itemId: string;
+  videoUrl: string;
+  videoFileName?: string;
+  provider: string;
+  videoId?: string;
+  title?: string;
+  position: number;
+  scheduledAtUtc?: string;
+  scheduleType: string;
+  relativeMinutes?: number;
+  relativeVideoCount?: number;
+  createdAtUtc: string;
+  addedByUserId: string;
+}
+
+export interface VideoQueue {
+  items: QueueItem[];
+  autoAdvance: boolean;
+  currentIndex: number;
+}
+
 export interface Room {
   code: string;
   host: string;
@@ -43,6 +65,10 @@ interface WebSocketMessage {
   isPlaying?: boolean;
   message?: string;
   state?: VideoState;
+  queueItems?: QueueItem[];
+  queueItem?: QueueItem;
+  autoAdvance?: boolean;
+  currentQueueIndex?: number;
 }
 
 @Injectable({
@@ -73,7 +99,13 @@ export class SocketService {
   private videoPauseSubject = new Subject<{ currentTime: number; sentAtUnixMs?: number }>();
   private videoSeekSubject = new Subject<{ currentTime: number; isPlaying: boolean; sentAtUnixMs?: number }>();
   private hostChangedSubject = new Subject<{ newHostId: string }>();
-  
+
+  // Queue subjects
+  private queueUpdatedSubject = new Subject<{ items: QueueItem[]; autoAdvance: boolean; currentIndex: number }>();
+  private queueAdvanceSubject = new Subject<{ item: QueueItem; items: QueueItem[]; currentIndex: number }>();
+  private queueSettingsSubject = new Subject<{ autoAdvance: boolean }>();
+  private queueExhaustedSubject = new Subject<{ items: QueueItem[]; currentIndex: number }>();
+
   // Subject para room_state
   private roomStateSubject = new Subject<{ users: Participant[] }>();
   public roomState$ = this.roomStateSubject.asObservable();
@@ -325,6 +357,50 @@ export class SocketService {
           console.log('[SocketService] Chat message:', message.message);
           break;
 
+        case 'queue_updated':
+          console.log('[SocketService] Queue updated:', message.queueItems?.length, 'items');
+          this.queueUpdatedSubject.next({
+            items: message.queueItems || [],
+            autoAdvance: message.autoAdvance ?? true,
+            currentIndex: message.currentQueueIndex ?? -1
+          });
+          break;
+
+        case 'queue_advance':
+          console.log('[SocketService] Queue advanced to:', message.queueItem?.title || message.queueItem?.videoUrl);
+          if (message.queueItem) {
+            this.queueAdvanceSubject.next({
+              item: message.queueItem,
+              items: message.queueItems || [],
+              currentIndex: message.currentQueueIndex ?? -1
+            });
+            // Also emit video changed for the room component to pick up
+            const newUrl = message.queueItem.videoUrl || message.queueItem.videoFileName;
+            if (newUrl) {
+              this.videoChangedSubject.next({
+                url: newUrl,
+                provider: message.queueItem.provider,
+                videoId: message.queueItem.videoId
+              });
+            }
+          }
+          break;
+
+        case 'queue_settings_updated':
+          console.log('[SocketService] Queue settings updated, autoAdvance:', message.autoAdvance);
+          this.queueSettingsSubject.next({
+            autoAdvance: message.autoAdvance ?? true
+          });
+          break;
+
+        case 'queue_exhausted':
+          console.log('[SocketService] Queue exhausted');
+          this.queueExhaustedSubject.next({
+            items: message.queueItems || [],
+            currentIndex: message.currentQueueIndex ?? -1
+          });
+          break;
+
         default:
           console.log('[SocketService] Unknown message type:', message.type);
       }
@@ -512,6 +588,24 @@ export class SocketService {
     });
   }
 
+  sendVideoEnded(): void {
+    if (!this.currentIsHost) {
+      console.warn('[SocketService] Ignoring sendVideoEnded: current user is not host');
+      return;
+    }
+    console.log('[SocketService] Sending video_ended');
+    this.sendMessage({ type: 'video_ended' });
+  }
+
+  skipToNext(): void {
+    if (!this.currentIsHost) {
+      console.warn('[SocketService] Ignoring skipToNext: current user is not host');
+      return;
+    }
+    console.log('[SocketService] Sending queue_skip');
+    this.sendMessage({ type: 'queue_skip' });
+  }
+
   leaveRoom(): void {
     if (this.ws) {
       console.log('[SocketService] Leaving room and closing connection');
@@ -575,6 +669,23 @@ export class SocketService {
 
   onHostChanged(): Observable<{ newHostId: string }> {
     return this.hostChangedSubject.asObservable();
+  }
+
+  // Queue observables
+  onQueueUpdated(): Observable<{ items: QueueItem[]; autoAdvance: boolean; currentIndex: number }> {
+    return this.queueUpdatedSubject.asObservable();
+  }
+
+  onQueueAdvance(): Observable<{ item: QueueItem; items: QueueItem[]; currentIndex: number }> {
+    return this.queueAdvanceSubject.asObservable();
+  }
+
+  onQueueSettingsUpdated(): Observable<{ autoAdvance: boolean }> {
+    return this.queueSettingsSubject.asObservable();
+  }
+
+  onQueueExhausted(): Observable<{ items: QueueItem[]; currentIndex: number }> {
+    return this.queueExhaustedSubject.asObservable();
   }
 
   // Observable para todos los mensajes raw

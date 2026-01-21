@@ -66,5 +66,25 @@ namespace WatchPartyBackend.Models
         /// Estado completo del video (para nuevos usuarios)
         /// </summary>
         public VideoState? State { get; set; }
+
+        /// <summary>
+        /// Lista de items de la cola (para queue_updated)
+        /// </summary>
+        public List<QueueItem>? QueueItems { get; set; }
+
+        /// <summary>
+        /// Item individual de la cola (para queue_advance)
+        /// </summary>
+        public QueueItem? QueueItem { get; set; }
+
+        /// <summary>
+        /// Configuración de auto-advance de la cola
+        /// </summary>
+        public bool? AutoAdvance { get; set; }
+
+        /// <summary>
+        /// Índice actual en la cola
+        /// </summary>
+        public int? CurrentQueueIndex { get; set; }
     }
 }

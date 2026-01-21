@@ -45,5 +45,10 @@ namespace WatchPartyBackend.Models
         /// Fecha de creación de la sala
         /// </summary>
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+        /// <summary>
+        /// Cola de videos para la sala
+        /// </summary>
+        public VideoQueue Queue { get; set; } = new VideoQueue();
     }
 }

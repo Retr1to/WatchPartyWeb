@@ -2,10 +2,11 @@ import { AfterViewInit, Component, DestroyRef, ElementRef, OnDestroy, OnInit, Vi
 import { ActivatedRoute, Router } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { SocketService, Room, Participant } from '../../services/socket.service';
+import { SocketService, Room, Participant, QueueItem } from '../../services/socket.service';
 import { ToastService } from '../../services/toast.service';
 import { CastService, CastStatus } from '../../services/cast.service';
 import { AirPlayService, AirPlayStatus } from '../../services/airplay.service';
+import { VideoQueueComponent } from '../video-queue/video-queue.component';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 declare const YT: any;
@@ -20,7 +21,7 @@ interface VideoSource {
 @Component({
   selector: 'app-room',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, VideoQueueComponent],
   templateUrl: './room.component.html',
   styleUrls: ['./room.component.css']
 })
@@ -457,6 +458,13 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     if (video.seeking) return;
     if (!this.isHost() && this.viewerIsSeeking) return;
     this.lastAllowedVideoTime = video.currentTime;
+  }
+
+  onVideoEnded(): void {
+    console.log('[RoomComponent] Video ended');
+    if (this.isHost()) {
+      this.socketService.sendVideoEnded();
+    }
   }
 
   isHost(): boolean {

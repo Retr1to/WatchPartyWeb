@@ -56,6 +56,7 @@ builder.Services.AddSingleton(new VideoStorageOptions
     MaxAge = TimeSpan.FromHours(Math.Max(1, maxAgeHours))
 });
 builder.Services.AddHostedService<VideoStorageCleanupService>();
+builder.Services.AddHostedService<QueueSchedulerService>();
 
 // Add CORS
 builder.Services.AddCors(options =>
@@ -643,6 +644,114 @@ async Task ProcessMessage(string roomId, string userId, WebSocketMessage message
             });
             break;
 
+        case "video_ended":
+            if (!isHost)
+            {
+                Console.WriteLine($"User {userId} sent video_ended but is not host");
+                return;
+            }
+
+            var endedQueue = roomManager.GetQueue(roomId);
+            if (endedQueue != null && endedQueue.AutoAdvance)
+            {
+                var nextItem = roomManager.AdvanceQueue(roomId);
+                if (nextItem != null)
+                {
+                    var nextVideoState = new VideoState
+                    {
+                        VideoFileName = nextItem.VideoFileName ?? string.Empty,
+                        VideoUrl = nextItem.VideoUrl,
+                        Provider = nextItem.Provider,
+                        VideoId = nextItem.VideoId,
+                        CurrentTime = 0,
+                        IsPlaying = false
+                    };
+                    roomManager.UpdateVideoState(roomId, nextVideoState);
+
+                    await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+                    {
+                        Type = "queue_advance",
+                        QueueItem = nextItem,
+                        QueueItems = endedQueue.GetItems(),
+                        CurrentQueueIndex = endedQueue.CurrentIndex,
+                        VideoUrl = nextItem.VideoUrl,
+                        VideoFileName = nextItem.VideoFileName,
+                        Provider = nextItem.Provider,
+                        VideoId = nextItem.VideoId,
+                        State = nextVideoState,
+                        Message = $"Queue advanced to: {nextItem.Title ?? nextItem.VideoUrl}"
+                    });
+
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Queue auto-advanced in room {roomId}");
+                }
+                else
+                {
+                    await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+                    {
+                        Type = "queue_exhausted",
+                        QueueItems = endedQueue.GetItems(),
+                        CurrentQueueIndex = endedQueue.CurrentIndex,
+                        Message = "Queue has ended"
+                    });
+
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Queue exhausted in room {roomId}");
+                }
+            }
+            break;
+
+        case "queue_skip":
+            if (!isHost)
+            {
+                Console.WriteLine($"User {userId} tried to skip queue but is not host");
+                return;
+            }
+
+            var skipQueue = roomManager.GetQueue(roomId);
+            if (skipQueue != null)
+            {
+                var skipToItem = roomManager.AdvanceQueue(roomId);
+                if (skipToItem != null)
+                {
+                    var skipVideoState = new VideoState
+                    {
+                        VideoFileName = skipToItem.VideoFileName ?? string.Empty,
+                        VideoUrl = skipToItem.VideoUrl,
+                        Provider = skipToItem.Provider,
+                        VideoId = skipToItem.VideoId,
+                        CurrentTime = 0,
+                        IsPlaying = false
+                    };
+                    roomManager.UpdateVideoState(roomId, skipVideoState);
+
+                    await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+                    {
+                        Type = "queue_advance",
+                        QueueItem = skipToItem,
+                        QueueItems = skipQueue.GetItems(),
+                        CurrentQueueIndex = skipQueue.CurrentIndex,
+                        VideoUrl = skipToItem.VideoUrl,
+                        VideoFileName = skipToItem.VideoFileName,
+                        Provider = skipToItem.Provider,
+                        VideoId = skipToItem.VideoId,
+                        State = skipVideoState,
+                        Message = $"Skipped to: {skipToItem.Title ?? skipToItem.VideoUrl}"
+                    });
+
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] HOST {userId} skipped to next video in room {roomId}");
+                }
+                else
+                {
+                    await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+                    {
+                        Type = "queue_exhausted",
+                        QueueItems = skipQueue.GetItems(),
+                        CurrentQueueIndex = skipQueue.CurrentIndex,
+                        Message = "No more videos in queue"
+                    });
+                }
+            }
+            break;
+
         default:
             Console.WriteLine($"Unknown message type: {message.Type}");
             break;
@@ -878,6 +987,345 @@ app.MapGet("/room/{roomId}/state", (string roomId) =>
     });
 });
 
+// ============================================================
+// QUEUE ENDPOINTS
+// ============================================================
+
+// GET /room/{roomId}/queue - Obtener la cola de videos
+app.MapGet("/room/{roomId}/queue", (string roomId) =>
+{
+    if (!IsValidId(roomId))
+    {
+        return Results.BadRequest(new { error = "Invalid room id" });
+    }
+
+    var queue = roomManager.GetQueue(roomId);
+    if (queue == null)
+    {
+        return Results.Ok(new
+        {
+            items = Array.Empty<object>(),
+            autoAdvance = true,
+            currentIndex = -1
+        });
+    }
+
+    return Results.Ok(new
+    {
+        items = queue.GetItems(),
+        autoAdvance = queue.AutoAdvance,
+        currentIndex = queue.CurrentIndex
+    });
+});
+
+// POST /room/{roomId}/queue - Agregar video a la cola (solo host)
+app.MapPost("/room/{roomId}/queue", async (HttpContext context, string roomId) =>
+{
+    if (!IsValidId(roomId))
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsJsonAsync(new { error = "Invalid room id" });
+        return;
+    }
+
+    var userIdHeader = context.Request.Headers["X-User-Id"].ToString();
+    var sessionKeyHeader = context.Request.Headers["X-Session-Key"].ToString();
+    var isHost = roomManager.IsHost(roomId, userIdHeader);
+    var isSessionValid = roomManager.ValidateSession(roomId, userIdHeader, sessionKeyHeader);
+
+    if (!isHost || !isSessionValid)
+    {
+        context.Response.StatusCode = 403;
+        await context.Response.WriteAsJsonAsync(new { error = "Only the host can modify the queue" });
+        return;
+    }
+
+    try
+    {
+        var request = await context.Request.ReadFromJsonAsync<AddToQueueRequest>();
+        if (request == null || string.IsNullOrWhiteSpace(request.VideoUrl))
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.WriteAsJsonAsync(new { error = "videoUrl is required" });
+            return;
+        }
+
+        var item = new QueueItem
+        {
+            VideoUrl = request.VideoUrl,
+            VideoFileName = request.VideoFileName,
+            Provider = request.Provider ?? "url",
+            VideoId = request.VideoId,
+            Title = request.Title,
+            ScheduleType = request.ScheduleType ?? "none",
+            AddedByUserId = userIdHeader
+        };
+
+        // Manejar planificación
+        if (item.ScheduleType == "absolute" && request.ScheduledAtUtc.HasValue)
+        {
+            item.ScheduledAtUtc = request.ScheduledAtUtc.Value;
+        }
+        else if (item.ScheduleType == "relative_time" && request.RelativeMinutes.HasValue)
+        {
+            item.RelativeMinutes = request.RelativeMinutes.Value;
+            item.ScheduledAtUtc = DateTime.UtcNow.AddMinutes(request.RelativeMinutes.Value);
+        }
+        else if (item.ScheduleType == "relative_videos" && request.RelativeVideoCount.HasValue)
+        {
+            item.RelativeVideoCount = request.RelativeVideoCount.Value;
+        }
+
+        var success = roomManager.AddToQueue(roomId, item);
+        if (!success)
+        {
+            context.Response.StatusCode = 404;
+            await context.Response.WriteAsJsonAsync(new { error = "Room not found" });
+            return;
+        }
+
+        var queue = roomManager.GetQueue(roomId);
+
+        // Broadcast queue_updated a todos los usuarios
+        await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+        {
+            Type = "queue_updated",
+            QueueItems = queue?.GetItems(),
+            AutoAdvance = queue?.AutoAdvance,
+            CurrentQueueIndex = queue?.CurrentIndex,
+            Message = $"Video added to queue: {item.Title ?? item.VideoUrl}"
+        });
+
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Video added to queue in room {roomId}: {item.VideoUrl}");
+
+        context.Response.StatusCode = 200;
+        await context.Response.WriteAsJsonAsync(new
+        {
+            success = true,
+            item = item,
+            queue = new
+            {
+                items = queue?.GetItems(),
+                autoAdvance = queue?.AutoAdvance,
+                currentIndex = queue?.CurrentIndex
+            }
+        });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Error adding to queue: {ex.Message}");
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsJsonAsync(new { error = "Invalid request body" });
+    }
+});
+
+// DELETE /room/{roomId}/queue/{itemId} - Eliminar video de la cola (solo host)
+app.MapDelete("/room/{roomId}/queue/{itemId}", async (HttpContext context, string roomId, string itemId) =>
+{
+    if (!IsValidId(roomId))
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsJsonAsync(new { error = "Invalid room id" });
+        return;
+    }
+
+    if (!IsValidId(itemId, maxLength: 128))
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsJsonAsync(new { error = "Invalid item id" });
+        return;
+    }
+
+    var userIdHeader = context.Request.Headers["X-User-Id"].ToString();
+    var sessionKeyHeader = context.Request.Headers["X-Session-Key"].ToString();
+    var isHost = roomManager.IsHost(roomId, userIdHeader);
+    var isSessionValid = roomManager.ValidateSession(roomId, userIdHeader, sessionKeyHeader);
+
+    if (!isHost || !isSessionValid)
+    {
+        context.Response.StatusCode = 403;
+        await context.Response.WriteAsJsonAsync(new { error = "Only the host can modify the queue" });
+        return;
+    }
+
+    var success = roomManager.RemoveFromQueue(roomId, itemId);
+    if (!success)
+    {
+        context.Response.StatusCode = 404;
+        await context.Response.WriteAsJsonAsync(new { error = "Item not found" });
+        return;
+    }
+
+    var queue = roomManager.GetQueue(roomId);
+
+    // Broadcast queue_updated a todos los usuarios
+    await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+    {
+        Type = "queue_updated",
+        QueueItems = queue?.GetItems(),
+        AutoAdvance = queue?.AutoAdvance,
+        CurrentQueueIndex = queue?.CurrentIndex,
+        Message = "Video removed from queue"
+    });
+
+    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Video removed from queue in room {roomId}: {itemId}");
+
+    context.Response.StatusCode = 200;
+    await context.Response.WriteAsJsonAsync(new
+    {
+        success = true,
+        queue = new
+        {
+            items = queue?.GetItems(),
+            autoAdvance = queue?.AutoAdvance,
+            currentIndex = queue?.CurrentIndex
+        }
+    });
+});
+
+// PUT /room/{roomId}/queue/reorder - Reordenar la cola (solo host)
+app.MapPut("/room/{roomId}/queue/reorder", async (HttpContext context, string roomId) =>
+{
+    if (!IsValidId(roomId))
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsJsonAsync(new { error = "Invalid room id" });
+        return;
+    }
+
+    var userIdHeader = context.Request.Headers["X-User-Id"].ToString();
+    var sessionKeyHeader = context.Request.Headers["X-Session-Key"].ToString();
+    var isHost = roomManager.IsHost(roomId, userIdHeader);
+    var isSessionValid = roomManager.ValidateSession(roomId, userIdHeader, sessionKeyHeader);
+
+    if (!isHost || !isSessionValid)
+    {
+        context.Response.StatusCode = 403;
+        await context.Response.WriteAsJsonAsync(new { error = "Only the host can modify the queue" });
+        return;
+    }
+
+    try
+    {
+        var request = await context.Request.ReadFromJsonAsync<ReorderQueueRequest>();
+        if (request == null || request.ItemIds == null || request.ItemIds.Count == 0)
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.WriteAsJsonAsync(new { error = "itemIds array is required" });
+            return;
+        }
+
+        var success = roomManager.ReorderQueue(roomId, request.ItemIds);
+        if (!success)
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.WriteAsJsonAsync(new { error = "Failed to reorder queue. Check that all item IDs are valid." });
+            return;
+        }
+
+        var queue = roomManager.GetQueue(roomId);
+
+        // Broadcast queue_updated a todos los usuarios
+        await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+        {
+            Type = "queue_updated",
+            QueueItems = queue?.GetItems(),
+            AutoAdvance = queue?.AutoAdvance,
+            CurrentQueueIndex = queue?.CurrentIndex,
+            Message = "Queue reordered"
+        });
+
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Queue reordered in room {roomId}");
+
+        context.Response.StatusCode = 200;
+        await context.Response.WriteAsJsonAsync(new
+        {
+            success = true,
+            queue = new
+            {
+                items = queue?.GetItems(),
+                autoAdvance = queue?.AutoAdvance,
+                currentIndex = queue?.CurrentIndex
+            }
+        });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Error reordering queue: {ex.Message}");
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsJsonAsync(new { error = "Invalid request body" });
+    }
+});
+
+// PUT /room/{roomId}/queue/settings - Configurar auto-advance (solo host)
+app.MapPut("/room/{roomId}/queue/settings", async (HttpContext context, string roomId) =>
+{
+    if (!IsValidId(roomId))
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsJsonAsync(new { error = "Invalid room id" });
+        return;
+    }
+
+    var userIdHeader = context.Request.Headers["X-User-Id"].ToString();
+    var sessionKeyHeader = context.Request.Headers["X-Session-Key"].ToString();
+    var isHost = roomManager.IsHost(roomId, userIdHeader);
+    var isSessionValid = roomManager.ValidateSession(roomId, userIdHeader, sessionKeyHeader);
+
+    if (!isHost || !isSessionValid)
+    {
+        context.Response.StatusCode = 403;
+        await context.Response.WriteAsJsonAsync(new { error = "Only the host can modify queue settings" });
+        return;
+    }
+
+    try
+    {
+        var request = await context.Request.ReadFromJsonAsync<QueueSettingsRequest>();
+        if (request == null)
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.WriteAsJsonAsync(new { error = "Invalid request body" });
+            return;
+        }
+
+        var success = roomManager.UpdateQueueSettings(roomId, request.AutoAdvance);
+        if (!success)
+        {
+            context.Response.StatusCode = 404;
+            await context.Response.WriteAsJsonAsync(new { error = "Room not found" });
+            return;
+        }
+
+        var queue = roomManager.GetQueue(roomId);
+
+        // Broadcast queue_settings_updated a todos los usuarios
+        await roomManager.BroadcastToRoom(roomId, new WebSocketMessage
+        {
+            Type = "queue_settings_updated",
+            AutoAdvance = request.AutoAdvance,
+            QueueItems = queue?.GetItems(),
+            CurrentQueueIndex = queue?.CurrentIndex,
+            Message = $"Auto-advance is now {(request.AutoAdvance ? "enabled" : "disabled")}"
+        });
+
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Queue settings updated in room {roomId}: autoAdvance={request.AutoAdvance}");
+
+        context.Response.StatusCode = 200;
+        await context.Response.WriteAsJsonAsync(new
+        {
+            success = true,
+            autoAdvance = request.AutoAdvance
+        });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Error updating queue settings: {ex.Message}");
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsJsonAsync(new { error = "Invalid request body" });
+    }
+});
+
 var spaIndexPath = Path.Combine(app.Environment.WebRootPath ?? app.Environment.ContentRootPath, "index.html");
 if (File.Exists(spaIndexPath))
 {
@@ -885,3 +1333,30 @@ if (File.Exists(spaIndexPath))
 }
 
 app.Run();
+
+// ============================================================
+// REQUEST DTOs FOR QUEUE OPERATIONS
+// ============================================================
+
+public record AddToQueueRequest
+{
+    public string VideoUrl { get; init; } = string.Empty;
+    public string? VideoFileName { get; init; }
+    public string? Provider { get; init; }
+    public string? VideoId { get; init; }
+    public string? Title { get; init; }
+    public string? ScheduleType { get; init; }
+    public DateTime? ScheduledAtUtc { get; init; }
+    public int? RelativeMinutes { get; init; }
+    public int? RelativeVideoCount { get; init; }
+}
+
+public record ReorderQueueRequest
+{
+    public List<string> ItemIds { get; init; } = new();
+}
+
+public record QueueSettingsRequest
+{
+    public bool AutoAdvance { get; init; } = true;
+}

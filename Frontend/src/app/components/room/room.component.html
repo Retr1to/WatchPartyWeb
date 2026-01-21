@@ -55,7 +55,7 @@
             </div>
           </ng-container>
           <ng-container *ngSwitchDefault>
-            <video 
+            <video
               #videoPlayer
               *ngIf="videoUrl"
               [src]="videoUrl"
@@ -64,6 +64,7 @@
               (seeking)="onSeeking()"
               (seeked)="onSeeked()"
               (timeupdate)="onTimeUpdate()"
+              (ended)="onVideoEnded()"
               controls
               controlsList="nodownload"
               playsinline
@@ -134,6 +135,12 @@
           </div>
         </div>
       </div>
+
+      <!-- Video Queue Section -->
+      <app-video-queue
+        [roomId]="roomCode"
+        [isHost]="isHost()"
+      ></app-video-queue>
     </div>
 
     <div class="participants-section">

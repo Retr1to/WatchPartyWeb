@@ -274,9 +274,9 @@ namespace WatchPartyBackend.Services
         private async Task CloseWebSocketSafely(WebSocket? socket, CancellationToken cancellationToken = default)
         {
             if (socket == null) return;
-            
-            if (socket.State == WebSocketState.Open || 
-                socket.State == WebSocketState.CloseReceived || 
+
+            if (socket.State == WebSocketState.Open ||
+                socket.State == WebSocketState.CloseReceived ||
                 socket.State == WebSocketState.CloseSent)
             {
                 try
@@ -305,6 +305,99 @@ namespace WatchPartyBackend.Services
             {
                 // Socket already disposed, nothing to do
             }
+        }
+
+        // ============================================================
+        // QUEUE MANAGEMENT METHODS
+        // ============================================================
+
+        /// <summary>
+        /// Obtiene la cola de videos de una sala
+        /// </summary>
+        public VideoQueue? GetQueue(string roomId)
+        {
+            return _rooms.TryGetValue(roomId, out var room) ? room.Queue : null;
+        }
+
+        /// <summary>
+        /// Agrega un item a la cola de videos
+        /// </summary>
+        public bool AddToQueue(string roomId, QueueItem item)
+        {
+            if (!_rooms.TryGetValue(roomId, out var room)) return false;
+            room.Queue.AddItem(item);
+            return true;
+        }
+
+        /// <summary>
+        /// Remueve un item de la cola de videos
+        /// </summary>
+        public bool RemoveFromQueue(string roomId, string itemId)
+        {
+            if (!_rooms.TryGetValue(roomId, out var room)) return false;
+            return room.Queue.RemoveItem(itemId);
+        }
+
+        /// <summary>
+        /// Reordena la cola de videos
+        /// </summary>
+        public bool ReorderQueue(string roomId, List<string> itemIds)
+        {
+            if (!_rooms.TryGetValue(roomId, out var room)) return false;
+            return room.Queue.Reorder(itemIds);
+        }
+
+        /// <summary>
+        /// Actualiza la configuración de auto-advance de la cola
+        /// </summary>
+        public bool UpdateQueueSettings(string roomId, bool autoAdvance)
+        {
+            if (!_rooms.TryGetValue(roomId, out var room)) return false;
+            room.Queue.AutoAdvance = autoAdvance;
+            return true;
+        }
+
+        /// <summary>
+        /// Avanza la cola al siguiente video
+        /// </summary>
+        public QueueItem? AdvanceQueue(string roomId)
+        {
+            if (!_rooms.TryGetValue(roomId, out var room)) return null;
+            return room.Queue.AdvanceToNext();
+        }
+
+        /// <summary>
+        /// Avanza la cola a un item específico
+        /// </summary>
+        public QueueItem? AdvanceQueueToItem(string roomId, string itemId)
+        {
+            if (!_rooms.TryGetValue(roomId, out var room)) return null;
+            return room.Queue.AdvanceToItem(itemId);
+        }
+
+        /// <summary>
+        /// Obtiene todas las salas con items programados que deben reproducirse
+        /// </summary>
+        public List<(string RoomId, QueueItem Item)> GetScheduledItemsDue()
+        {
+            var result = new List<(string, QueueItem)>();
+            foreach (var (roomId, room) in _rooms)
+            {
+                var dueItems = room.Queue.GetScheduledItemsDue();
+                foreach (var item in dueItems)
+                {
+                    result.Add((roomId, item));
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Obtiene los IDs de todas las salas activas
+        /// </summary>
+        public IEnumerable<string> GetAllRoomIds()
+        {
+            return _rooms.Keys.ToList();
         }
     }
 }
