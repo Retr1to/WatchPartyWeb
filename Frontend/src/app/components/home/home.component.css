@@ -1,21 +1,32 @@
 .home-container {
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: flex-start;
   min-height: 100vh;
   padding: 20px;
+}
+
+.main-content {
+  width: 100%;
+  max-width: 1200px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 .card {
   background: var(--surface-base);
   backdrop-filter: blur(var(--backdrop-blur)) saturate(var(--backdrop-saturate));
   border-radius: 24px;
-  padding: 48px 40px;
+  padding: 32px;
   width: 100%;
-  max-width: 480px;
-  text-align: center;
   box-shadow: var(--shadow-lg);
   border: 1px solid var(--border-base);
+}
+
+.header-card {
+  text-align: center;
+  padding: 48px 40px;
 }
 
 .icon {
@@ -45,10 +56,85 @@ h1 {
   color: var(--text-primary);
 }
 
+h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+}
+
 .subtitle {
   font-size: 1rem;
   color: var(--text-secondary);
   margin-bottom: 32px;
+}
+
+/* User Info */
+.user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+  padding: 16px;
+  background: var(--surface-elevated);
+  border-radius: 12px;
+  border: 1px solid var(--border-base);
+}
+
+.user-welcome {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: center;
+  font-size: 1.1rem;
+}
+
+.user-icon {
+  font-size: 1.5rem;
+}
+
+.username {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.btn-logout {
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  background: var(--surface-base);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-base);
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.btn-logout:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+/* Auth Buttons */
+.auth-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.action-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .username-input {
@@ -75,6 +161,14 @@ h1 {
   background: var(--surface-hover);
 }
 
+input {
+  outline: none;
+}
+
+input:focus {
+  outline: none;
+}
+
 .btn {
   width: 100%;
   padding: 16px 24px;
@@ -86,12 +180,13 @@ h1 {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  border: none;
+  cursor: pointer;
 }
 
 .btn-primary {
   background: var(--primary-gradient);
   color: var(--text-primary);
-  margin-bottom: 16px;
   box-shadow: var(--shadow-md);
 }
 
@@ -112,6 +207,47 @@ h1 {
 }
 
 .btn-secondary:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
+}
+
+.btn-tertiary {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  border: 2px solid var(--border-base);
+}
+
+.btn-tertiary:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
+}
+
+.btn-small {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  border: none;
+}
+
+.btn-accept {
+  background: var(--primary-gradient);
+  color: var(--text-primary);
+}
+
+.btn-accept:hover {
+  filter: brightness(1.1);
+}
+
+.btn-reject {
+  background: var(--surface-base);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-base);
+}
+
+.btn-reject:hover {
   background: var(--surface-hover);
   border-color: var(--border-hover);
 }
@@ -138,6 +274,146 @@ h1 {
 
 .star {
   font-size: 1.2rem;
+}
+
+/* Rooms List */
+.rooms-card,
+.friends-card,
+.requests-card {
+  padding: 24px;
+}
+
+.rooms-list,
+.friends-list,
+.requests-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.room-item {
+  padding: 16px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-base);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.room-item:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
+  transform: translateX(4px);
+  box-shadow: var(--shadow-md);
+}
+
+.room-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.room-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 1.1rem;
+}
+
+.room-code {
+  font-family: monospace;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  background: var(--surface-base);
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-base);
+}
+
+.room-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 0.9rem;
+  color: var(--text-tertiary);
+}
+
+.room-owner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Friends List */
+.friend-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-base);
+  border-radius: 8px;
+}
+
+.friend-icon {
+  font-size: 1.5rem;
+}
+
+.friend-name {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.friend-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.friend-email {
+  font-size: 0.85rem;
+  color: var(--text-tertiary);
+}
+
+/* Requests List */
+.request-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-base);
+  border-radius: 8px;
+}
+
+.request-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.request-icon {
+  font-size: 1.5rem;
+}
+
+.request-from {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.request-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.request-email {
+  font-size: 0.85rem;
+  color: var(--text-tertiary);
+}
+
+.request-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .error-message {
@@ -186,6 +462,12 @@ h1 {
   animation: slideUp 0.3s ease;
 }
 
+.modal-large {
+  max-width: 600px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
 @keyframes slideUp {
   from {
     transform: translateY(20px);
@@ -201,6 +483,7 @@ h1 {
   font-size: 1.5rem;
   margin-bottom: 20px;
   color: var(--text-primary);
+  text-align: center;
 }
 
 .modal-content input {
@@ -212,10 +495,20 @@ h1 {
   color: var(--text-primary);
   font-size: 1rem;
   margin-bottom: 20px;
+}
+
+.modal-content input[type="text"] {
   text-transform: uppercase;
   letter-spacing: 2px;
   font-weight: 600;
   text-align: center;
+}
+
+.modal-content input[type="email"] {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  text-align: left;
 }
 
 .modal-content input::placeholder {
@@ -240,8 +533,80 @@ h1 {
   margin-bottom: 0;
 }
 
+/* Visibility Options */
+.visibility-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--surface-base);
+  border: 2px solid var(--border-base);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.radio-option:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
+}
+
+.radio-option input[type="radio"] {
+  margin: 0;
+  width: auto;
+  padding: 0;
+}
+
+.radio-option span {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.radio-option input[type="radio"]:checked + span {
+  color: var(--text-primary);
+}
+
+/* Friend Management */
+.friend-section {
+  margin-bottom: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border-base);
+}
+
+.friend-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.friend-input-group {
+  display: flex;
+  gap: 12px;
+}
+
+.friend-input-group input {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.friend-input-group .btn {
+  width: auto;
+  padding: 14px 24px;
+}
+
 @media (max-width: 600px) {
   .card {
+    padding: 24px 20px;
+  }
+
+  .header-card {
     padding: 32px 24px;
   }
 
@@ -252,5 +617,31 @@ h1 {
   .icon {
     width: 80px;
     height: 80px;
+  }
+
+  .main-content {
+    padding: 0 10px;
+  }
+
+  .modal-content {
+    padding: 24px;
+  }
+
+  .modal-large {
+    max-height: 90vh;
+  }
+
+  .room-info {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .friend-input-group {
+    flex-direction: column;
+  }
+
+  .friend-input-group .btn {
+    width: 100%;
   }
 }

@@ -75,6 +75,13 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
 
   ngOnInit(): void {
     this.roomCode = this.route.snapshot.paramMap.get('code') || '';
+    
+    if (!this.roomCode) {
+      console.error('[RoomComponent] No room code in route, navigating home');
+      this.router.navigate(['/']);
+      return;
+    }
+    
     console.log('[RoomComponent] Initialized with code:', this.roomCode);
     
     const navigation = this.router.getCurrentNavigation();
@@ -83,13 +90,16 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     if (state && state['room']) {
       console.log('[RoomComponent] Room data from router:', state['room']);
       this.room = state['room'];
-      if (this.room && this.room.videoState.url) {
-        this.applyVideoSource({
-          url: this.room.videoState.url,
-          provider: 'url'
-        }, this.room.videoState.currentTime, this.room.videoState.isPlaying);
+      if (this.room) {
+        this.room.code = this.roomCode; // Ensure room.code is set from route
+        if (this.room.videoState.url) {
+          this.applyVideoSource({
+            url: this.room.videoState.url,
+            provider: 'url'
+          }, this.room.videoState.currentTime, this.room.videoState.isPlaying);
+        }
+        this.findCurrentUser();
       }
-      this.findCurrentUser();
       this.needsJoin = false;
     } else {
       this.needsJoin = true;
@@ -151,7 +161,9 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     this.socketService.onRoomCreated().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ roomCode, room }) => {
       console.log('[RoomComponent] Room created:', roomCode, room);
       this.room = room;
-      this.roomCode = roomCode;
+      this.roomCode = roomCode; // Update roomCode from server
+      this.room.code = roomCode; // Ensure room.code is set
+      console.log('[RoomComponent] Room code set to:', this.roomCode);
       this.needsJoin = false;
       if (room.videoState.url) {
         this.applyVideoSource({
@@ -165,6 +177,12 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
     this.socketService.onRoomJoined().pipe(takeUntilDestroyed(this.destroyRef)).subscribe(({ room }) => {
       console.log('[RoomComponent] Room joined:', room);
       this.room = room;
+      // Ensure roomCode is preserved - use room.code if available, otherwise keep this.roomCode
+      if (room.code && !this.roomCode) {
+        this.roomCode = room.code;
+        console.log('[RoomComponent] Room code recovered from room object:', this.roomCode);
+      }
+      this.room.code = this.roomCode; // Ensure room.code matches roomCode
       this.needsJoin = false;
       if (room.videoState.url) {
         this.applyVideoSource({
@@ -553,28 +571,44 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   private async uploadVideo(file: File): Promise<void> {
+    if (!this.roomCode) {
+      console.error('[RoomComponent] Cannot upload: roomCode is missing');
+      this.toastService.error('Error: No hay código de sala');
+      return;
+    }
+
+    if (!this.currentUser) {
+      console.error('[RoomComponent] Cannot upload: currentUser is missing');
+      this.toastService.error('Error: Usuario no identificado');
+      return;
+    }
+
     const validTypes = ['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'];
     if (!validTypes.includes(file.type)) {
-      alert('Tipo de archivo no válido. Usa MP4, WebM, OGG o MOV');
+      this.toastService.error('Tipo de archivo no válido. Usa MP4, WebM, OGG o MOV');
       return;
     }
     
     const maxSize = 100 * 1024 * 1024;
     if (file.size > maxSize) {
-      alert(`El archivo es muy grande (${(file.size / 1024 / 1024).toFixed(2)} MB). Máximo 100 MB`);
+      this.toastService.error(`El archivo es muy grande (${(file.size / 1024 / 1024).toFixed(2)} MB). Máximo 100 MB`);
       return;
     }
 
     const formData = new FormData();
     formData.append('video', file);
 
+    const uploadUrl = `${this.socketService.getHttpBaseUrl()}/upload/${this.roomCode}`;
+    console.log('[RoomComponent] Uploading video to:', uploadUrl);
+    console.log('[RoomComponent] Room code:', this.roomCode);
+    console.log('[RoomComponent] User ID:', this.currentUser.id);
+    console.log('[RoomComponent] File:', file.name, `(${(file.size / 1024 / 1024).toFixed(2)} MB)`);
+
     try {
-      console.log('[RoomComponent] Uploading video:', file.name, `(${(file.size / 1024 / 1024).toFixed(2)} MB)`);
-      
-      const response = await fetch(`${this.socketService.getHttpBaseUrl()}/upload/${this.roomCode}`, {
+      const response = await fetch(uploadUrl, {
         method: 'POST',
         headers: {
-          'X-User-Id': this.currentUser?.id || '',
+          'X-User-Id': this.currentUser.id,
           'X-Session-Key': this.socketService.getSessionKey()
         },
         body: formData
@@ -585,13 +619,27 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
         console.log('[RoomComponent] Video uploaded successfully:', result);
         this.toastService.success(`Video subido: ${result.fileName}`);
       } else {
-        const error = await response.text();
-        console.error('[RoomComponent] Upload failed:', response.status, error);
-        alert('⚠️ Error al subir: ' + error);
+        const contentType = response.headers.get('content-type');
+        let errorMessage = `Error ${response.status}`;
+        
+        try {
+          if (contentType?.includes('application/json')) {
+            const errorData = await response.json();
+            errorMessage = errorData.error || errorData.message || errorMessage;
+          } else {
+            const errorText = await response.text();
+            errorMessage = errorText || errorMessage;
+          }
+        } catch (e) {
+          console.error('[RoomComponent] Could not parse error response:', e);
+        }
+        
+        console.error('[RoomComponent] Upload failed:', response.status, response.statusText, errorMessage);
+        this.toastService.error(`Error al subir video: ${errorMessage}`);
       }
     } catch (error) {
       console.error('[RoomComponent] Upload error:', error);
-      alert('⚠️ Error de red: ' + error);
+      this.toastService.error(`Error de red: ${error}`);
     }
   }
 

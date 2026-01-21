@@ -66,5 +66,10 @@ namespace WatchPartyBackend.Models
         /// Estado completo del video (para nuevos usuarios)
         /// </summary>
         public VideoState? State { get; set; }
+
+        /// <summary>
+        /// Datos adicionales para notificaciones (JSON serializable)
+        /// </summary>
+        public object? Data { get; set; }
     }
 }

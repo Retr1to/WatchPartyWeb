@@ -3,8 +3,12 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
 using WatchPartyBackend.Models;
 using WatchPartyBackend.Services;
+using WatchPartyBackend.Soap;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -36,8 +40,51 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = 200_000_000; // 200 MB
 });
 
-// Registrar RoomManager como Singleton
+// Registrar RoomManager y NotificationManager como Singleton
 builder.Services.AddSingleton<RoomManager>();
+builder.Services.AddSingleton<NotificationManager>();
+
+// Add database context
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
+    ?? Environment.GetEnvironmentVariable("DATABASE_URL") 
+    ?? "Host=localhost;Database=watchparty;Username=postgres;Password=postgres";
+
+builder.Services.AddDbContext<WatchPartyDbContext>(options =>
+    options.UseNpgsql(connectionString));
+
+// Add services
+builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<FriendService>();
+builder.Services.AddScoped<RoomService>();
+builder.Services.AddScoped<SoapRequestHandler>();
+
+// Add JWT Authentication
+var jwtSecret = builder.Configuration["JWT_SECRET"] ?? Environment.GetEnvironmentVariable("JWT_SECRET") ?? "your-super-secret-key-change-in-production-min-32-chars";
+var key = Encoding.UTF8.GetBytes(jwtSecret);
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.RequireHttpsMetadata = false;
+    options.SaveToken = true;
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(key),
+        ValidateIssuer = true,
+        ValidIssuer = "WatchPartyBackend",
+        ValidateAudience = true,
+        ValidAudience = "WatchPartyFrontend",
+        ValidateLifetime = true,
+        ClockSkew = TimeSpan.Zero
+    };
+});
+
+builder.Services.AddAuthorization();
 
 var videoStorageRoot = Environment.GetEnvironmentVariable("WATCHPARTY_VIDEO_STORAGE")
     ?? Path.Combine(Path.GetTempPath(), "watchparty_videos");
@@ -125,6 +172,8 @@ if (app.Environment.IsDevelopment())
 app.UseDefaultFiles();
 app.UseStaticFiles(); // ✅ Sirve archivos de wwwroot/
 app.UseCors("AllowFrontend");
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseWebSockets();
 
 var roomManager = app.Services.GetRequiredService<RoomManager>();
@@ -141,6 +190,7 @@ Directory.CreateDirectory(videoStorageRoot);
 
 roomManager.OnRoomRemoved = removedRoomId =>
 {
+    // Cleanup video files
     try
     {
         var roomDir = Path.Combine(videoStorageRoot, removedRoomId);
@@ -153,9 +203,25 @@ roomManager.OnRoomRemoved = removedRoomId =>
     {
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Video cleanup failed for room {removedRoomId}: {ex.Message}");
     }
+
+    // Deactivate room in database
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            using var scope = app.Services.CreateScope();
+            var roomService = scope.ServiceProvider.GetRequiredService<RoomService>();
+            await roomService.DeactivateRoomAsync(removedRoomId);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Database deactivation failed for room {removedRoomId}: {ex.Message}");
+        }
+    });
 };
 
-app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
+app.MapPost("/soap", async (HttpContext context, SoapRequestHandler soapHandler) =>
+    await soapHandler.HandleAsync(context));
 
 static bool IsValidId(string value, int maxLength = 64)
 {
@@ -846,36 +912,88 @@ app.MapGet("/videos/{roomId}", (string roomId) =>
 });
 
 // ============================================================
-// ENDPOINT para obtener el estado actual de una sala
+// WEBSOCKET ENDPOINT - Notificaciones globales
 // ============================================================
-app.MapGet("/room/{roomId}/state", (string roomId) =>
+app.Map("/notifications/ws", async (HttpContext context) =>
 {
-    if (!IsValidId(roomId))
+    if (!context.WebSockets.IsWebSocketRequest)
     {
-        return Results.BadRequest(new { error = "Invalid room id" });
+        context.Response.StatusCode = 400;
+        return;
     }
 
-    var videoState = roomManager.GetVideoState(roomId);
-    var users = roomManager.GetRoomUsers(roomId);
-
-    if (videoState == null)
+    // Obtener token del query parameter
+    var token = context.Request.Query["token"].ToString();
+    if (string.IsNullOrWhiteSpace(token))
     {
-        return Results.NotFound(new { error = "Room not found" });
+        context.Response.StatusCode = 401;
+        await context.Response.WriteAsync("Unauthorized: Token required");
+        return;
     }
 
-    var usersList = users.Select(u => new
+    // Validar el token JWT manualmente
+    var tokenHandler = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler();
+    var validationParameters = new TokenValidationParameters
     {
-        userId = u.Key,
-        username = u.Value,
-        isHost = roomManager.IsHost(roomId, u.Key)
-    }).ToList();
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(key),
+        ValidateIssuer = true,
+        ValidIssuer = "WatchPartyBackend",
+        ValidateAudience = true,
+        ValidAudience = "WatchPartyFrontend",
+        ValidateLifetime = true,
+        ClockSkew = TimeSpan.Zero
+    };
 
-    return Results.Ok(new
+    try
     {
-        roomId = roomId,
-        videoState = videoState,
-        users = usersList
-    });
+        var principal = tokenHandler.ValidateToken(token, validationParameters, out _);
+        var userIdClaim = principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier);
+        
+        if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
+        {
+            context.Response.StatusCode = 401;
+            await context.Response.WriteAsync("Unauthorized: Invalid user ID");
+            return;
+        }
+
+        var notificationManager = context.RequestServices.GetRequiredService<NotificationManager>();
+        var webSocket = await context.WebSockets.AcceptWebSocketAsync();
+
+        await notificationManager.AddConnection(userId, webSocket);
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] User {userId} connected to notifications");
+
+        // Mantener la conexión abierta
+        try
+        {
+            var buffer = new byte[1024 * 4];
+            while (webSocket.State == WebSocketState.Open)
+            {
+                var result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
+                    break;
+                }
+            }
+        }
+        catch (WebSocketException)
+        {
+            // Connection closed unexpectedly
+        }
+        finally
+        {
+            notificationManager.RemoveConnection(userId);
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] User {userId} disconnected from notifications");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Token validation failed: {ex.Message}");
+        context.Response.StatusCode = 401;
+        await context.Response.WriteAsync("Unauthorized: Invalid token");
+    }
 });
 
 var spaIndexPath = Path.Combine(app.Environment.WebRootPath ?? app.Environment.ContentRootPath, "index.html");
