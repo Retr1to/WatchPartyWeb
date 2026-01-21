@@ -1,38 +1,155 @@
 <div class="home-container">
-  <div class="card">
-    <div class="icon">
-      <app-animated-wave-icon
-        [size]="100"
-        [strokeWidth]="8"
-        [animated]="true"
-        [useGradient]="true"
-        [withGlow]="true">
-      </app-animated-wave-icon>
+  <div class="main-content">
+    <!-- Header Card -->
+    <div class="card header-card">
+      <div class="icon">
+        <app-animated-wave-icon
+          [size]="100"
+          [strokeWidth]="8"
+          [animated]="true"
+          [useGradient]="true"
+          [withGlow]="true">
+        </app-animated-wave-icon>
+      </div>
+
+      <h1>WatchTogether</h1>
+      <p class="subtitle">Ve videos con tus amigos en tiempo real</p>
+
+      <!-- Not Authenticated -->
+      <ng-container *ngIf="!(currentUser$ | async)">
+        <div class="auth-buttons">
+          <button class="btn btn-primary" (click)="goToLogin()">
+            Iniciar Sesión
+          </button>
+          <button class="btn btn-secondary" (click)="goToRegister()">
+            Registrarse
+          </button>
+        </div>
+      </ng-container>
+
+      <!-- Authenticated -->
+      <ng-container *ngIf="currentUser$ | async as user">
+        <div class="user-info">
+          <div class="user-welcome">
+            <span class="user-icon">👤</span>
+            <span class="username">{{ user.username }}</span>
+          </div>
+          <button class="btn btn-logout" (click)="logout()">Cerrar Sesión</button>
+        </div>
+
+        <div class="action-buttons">
+          <button class="btn btn-primary" (click)="showCreateDialog()">
+            <span class="star">✨</span> Crear Sala Nueva
+          </button>
+          <button class="btn btn-secondary" (click)="showJoinRoomDialog()">
+            Unirse a Sala
+          </button>
+          <button class="btn btn-tertiary" (click)="showFriendManagement()">
+            👥 Gestionar Amigos
+          </button>
+        </div>
+      </ng-container>
     </div>
 
-    <h1>WatchTogether</h1>
-    <p class="subtitle">Ve videos con tus amigos en tiempo real</p>
+    <!-- Authenticated Content -->
+    <ng-container *ngIf="currentUser$ | async">
+      <!-- Public Rooms -->
+      <div class="card rooms-card" *ngIf="publicRooms.length > 0">
+        <h2>🌍 Salas Públicas</h2>
+        <div class="rooms-list">
+          <div 
+            class="room-item" 
+            *ngFor="let room of publicRooms"
+            (click)="joinRoomByCode(room.roomCode)">
+            <div class="room-info">
+              <span class="room-name">{{ room.name || 'Sala sin nombre' }}</span>
+              <span class="room-code">{{ room.roomCode }}</span>
+            </div>
+            <div class="room-meta">
+              <span class="room-owner">👑 {{ room.owner.username }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
-    <div class="username-input">
-      <input 
-        type="text" 
-        [(ngModel)]="username" 
-        placeholder="Tu nombre (opcional)"
-        maxlength="20"
+      <!-- Friend Rooms -->
+      <div class="card rooms-card" *ngIf="friendRooms.length > 0">
+        <h2>👥 Salas de Amigos</h2>
+        <div class="rooms-list">
+          <div 
+            class="room-item" 
+            *ngFor="let room of friendRooms"
+            (click)="joinRoomByCode(room.roomCode)">
+            <div class="room-info">
+              <span class="room-name">{{ room.name || 'Sala sin nombre' }}</span>
+              <span class="room-code">{{ room.roomCode }}</span>
+            </div>
+            <div class="room-meta">
+              <span class="room-owner">👑 {{ room.owner.username }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Friends List -->
+      <div class="card friends-card" *ngIf="friends.length > 0">
+        <h2>✨ Mis Amigos</h2>
+        <div class="friends-list">
+          <div class="friend-item" *ngFor="let friend of friends">
+            <span class="friend-icon">👤</span>
+            <span class="friend-name">{{ friend.username }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pending Requests -->
+      <div class="card requests-card" *ngIf="pendingRequests.length > 0">
+        <h2>📬 Solicitudes Pendientes</h2>
+        <div class="requests-list">
+          <div class="request-item" *ngFor="let request of pendingRequests">
+            <div class="request-info">
+              <span class="request-icon">👤</span>
+              <span class="request-from">{{ request.from.username }}</span>
+            </div>
+            <div class="request-actions">
+              <button class="btn-small btn-accept" (click)="acceptFriendRequest(request.id)">✓</button>
+              <button class="btn-small btn-reject" (click)="rejectFriendRequest(request.id)">✗</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </ng-container>
+  </div>
+
+  <!-- Create Room Dialog -->
+  <div class="modal" *ngIf="showCreateRoomDialog" (click)="closeCreateDialog()">
+    <div class="modal-content" (click)="$event.stopPropagation()">
+      <h2>Crear Sala Nueva</h2>
+      <input
+        type="text"
+        [(ngModel)]="roomName"
+        placeholder="Nombre de la sala"
+        maxlength="50"
       />
+      <div class="visibility-options">
+        <label class="radio-option">
+          <input type="radio" name="visibility" value="Public" [(ngModel)]="roomVisibility" />
+          <span>🌍 Pública</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="visibility" value="Private" [(ngModel)]="roomVisibility" />
+          <span>🔒 Privada</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="visibility" value="Friends" [(ngModel)]="roomVisibility" />
+          <span>👥 Amigos</span>
+        </label>
+      </div>
+      <div class="modal-buttons">
+        <button class="btn btn-secondary" (click)="closeCreateDialog()">Cancelar</button>
+        <button class="btn btn-primary" (click)="createNewRoom()">Crear</button>
+      </div>
     </div>
-
-    <button class="btn btn-primary" (click)="createNewRoom()">
-      <span class="star">✨</span> Crear Sala Nueva
-    </button>
-
-    <div class="divider">
-      <span>o</span>
-    </div>
-
-    <button class="btn btn-secondary" (click)="showJoinRoomDialog()">
-      Unirse a Sala
-    </button>
   </div>
 
   <!-- Join Room Dialog -->
@@ -49,6 +166,61 @@
       <div class="modal-buttons">
         <button class="btn btn-secondary" (click)="closeDialog()">Cancelar</button>
         <button class="btn btn-primary" (click)="joinRoom()">Unirse</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Friend Management Dialog -->
+  <div class="modal" *ngIf="showFriendDialog" (click)="closeFriendDialog()">
+    <div class="modal-content modal-large" (click)="$event.stopPropagation()">
+      <h2>Gestionar Amigos</h2>
+      
+      <div class="friend-section">
+        <h3>Enviar Solicitud</h3>
+        <div class="friend-input-group">
+          <input
+            type="email"
+            [(ngModel)]="friendEmail"
+            placeholder="Email del amigo"
+          />
+          <button class="btn btn-primary" (click)="sendFriendRequest()">Enviar</button>
+        </div>
+      </div>
+
+      <div class="friend-section" *ngIf="pendingRequests.length > 0">
+        <h3>Solicitudes Pendientes ({{ pendingRequests.length }})</h3>
+        <div class="requests-list">
+          <div class="request-item" *ngFor="let request of pendingRequests">
+            <div class="request-info">
+              <span class="request-icon">👤</span>
+              <div class="request-details">
+                <span class="request-from">{{ request.from.username }}</span>
+                <span class="request-email">{{ request.from.email }}</span>
+              </div>
+            </div>
+            <div class="request-actions">
+              <button class="btn-small btn-accept" (click)="acceptFriendRequest(request.id)">Aceptar</button>
+              <button class="btn-small btn-reject" (click)="rejectFriendRequest(request.id)">Rechazar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="friend-section" *ngIf="friends.length > 0">
+        <h3>Mis Amigos ({{ friends.length }})</h3>
+        <div class="friends-list">
+          <div class="friend-item" *ngFor="let friend of friends">
+            <span class="friend-icon">👤</span>
+            <div class="friend-details">
+              <span class="friend-name">{{ friend.username }}</span>
+              <span class="friend-email">{{ friend.email }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-buttons">
+        <button class="btn btn-secondary" (click)="closeFriendDialog()">Cerrar</button>
       </div>
     </div>
   </div>

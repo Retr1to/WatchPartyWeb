@@ -1,0 +1,55 @@
+<div class="login-container">
+  <div class="login-card">
+    <div class="icon-wrapper">
+      <div class="gradient-icon">🔐</div>
+    </div>
+    
+    <h1>Login to WatchTogether</h1>
+    <p class="subtitle">Welcome back!</p>
+
+    <form (ngSubmit)="onSubmit()" class="login-form">
+      <div class="form-group">
+        <label for="email">Email</label>
+        <input
+          type="email"
+          id="email"
+          name="email"
+          [(ngModel)]="email"
+          placeholder="Enter your email"
+          required
+          [disabled]="loading"
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input
+          type="password"
+          id="password"
+          name="password"
+          [(ngModel)]="password"
+          placeholder="Enter your password"
+          required
+          [disabled]="loading"
+        />
+      </div>
+
+      <div class="error" *ngIf="error">
+        {{ error }}
+      </div>
+
+      <button type="submit" class="btn-primary" [disabled]="loading">
+        <span *ngIf="!loading">✨ Login</span>
+        <span *ngIf="loading">Loading...</span>
+      </button>
+
+      <div class="divider">
+        <span>or</span>
+      </div>
+
+      <a routerLink="/register" class="btn-secondary">
+        Create Account
+      </a>
+    </form>
+  </div>
+</div>
