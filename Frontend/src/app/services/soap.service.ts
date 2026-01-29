@@ -110,14 +110,10 @@ export class SoapService {
         return trimmed.endsWith('/soap') ? trimmed : `${trimmed}/soap`;
       }
 
-      const { protocol, hostname, host, port } = window.location;
-      if ((hostname === 'localhost' || hostname === '127.0.0.1') && (port === '4200' || port === '')) {
-        return 'http://localhost:5232/soap';
-      }
-
+      const { protocol, host } = window.location;
       return `${protocol}//${host}/soap`;
     } catch {
-      return 'http://localhost:5232/soap';
+      return `${window.location.protocol}//${window.location.host}/soap`;
     }
   }
 }

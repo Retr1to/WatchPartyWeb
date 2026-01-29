@@ -44,9 +44,9 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddSingleton<RoomManager>();
 builder.Services.AddSingleton<NotificationManager>();
 
-// Add database context
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
-    ?? Environment.GetEnvironmentVariable("DATABASE_URL") 
+// Add database context - prioritize DATABASE_URL for Docker/production
+var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
+    ?? builder.Configuration.GetConnectionString("DefaultConnection")
     ?? "Host=localhost;Database=watchparty;Username=postgres;Password=postgres";
 
 builder.Services.AddDbContext<WatchPartyDbContext>(options =>
@@ -151,7 +151,14 @@ catch
 }
 
  var app = builder.Build();
- 
+
+// Apply database migrations automatically
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<WatchPartyDbContext>();
+    db.Database.Migrate();
+}
+
 var runtimeWebRootPath = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
 try
 {

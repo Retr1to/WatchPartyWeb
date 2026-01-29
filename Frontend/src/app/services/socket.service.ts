@@ -132,13 +132,9 @@ export class SocketService {
       const { protocol, hostname, host, port } = window.location;
       const wsProtocol = protocol === 'https:' ? 'wss' : 'ws';
 
-      if ((hostname === 'localhost' || hostname === '127.0.0.1') && (port === '4200' || port === '')) {
-        return 'ws://localhost:5232';
-      }
-
       return `${wsProtocol}://${host}`;
     } catch {
-      return 'ws://localhost:5232';
+      return `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
     }
   }
 

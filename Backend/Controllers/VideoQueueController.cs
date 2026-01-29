@@ -21,9 +21,9 @@ namespace WatchPartyBackend.Controllers
         /// Obtiene la cola de videos de una sala
         /// </summary>
         [HttpGet("{roomId}")]
-        public IActionResult GetQueue(string roomId)
+        public IActionResult GetQueueItems(string roomId)
         {
-            var queue = _roomManager.GetVideoQueue(roomId);
+            var queue = _roomManager.GetQueue(roomId);
             if (queue == null)
             {
                 return NotFound(new { message = "Sala no encontrada" });
@@ -45,12 +45,12 @@ namespace WatchPartyBackend.Controllers
                 return Unauthorized(new { message = "Usuario no autenticado" });
             }
 
-            var item = new VideoQueueItem
+            var item = new QueueItem
             {
                 VideoFileName = request.VideoFileName,
                 Title = request.Title ?? request.VideoFileName,
-                AddedBy = userId,
-                AddedByUsername = request.Username ?? "Usuario"
+                AddedByUserId = userId,
+                Provider = "file"
             };
 
             var success = _roomManager.AddToQueue(roomId, item);
@@ -63,7 +63,7 @@ namespace WatchPartyBackend.Controllers
             await _roomManager.BroadcastToRoom(roomId, new WebSocketMessage
             {
                 Type = "queue_updated",
-                Data = new { queue = _roomManager.GetVideoQueue(roomId) }
+                Data = new { queue = _roomManager.GetQueue(roomId) }
             });
 
             return Ok(item);
@@ -98,7 +98,7 @@ namespace WatchPartyBackend.Controllers
             await _roomManager.BroadcastToRoom(roomId, new WebSocketMessage
             {
                 Type = "queue_updated",
-                Data = new { queue = _roomManager.GetVideoQueue(roomId) }
+                Data = new { queue = _roomManager.GetQueue(roomId) }
             });
 
             return Ok(new { message = "Video eliminado de la cola" });
@@ -111,7 +111,7 @@ namespace WatchPartyBackend.Controllers
         public async Task<IActionResult> PlayNext(string roomId)
         {
             var userId = Request.Headers["X-User-Id"].ToString();
-            
+
             if (string.IsNullOrEmpty(userId))
             {
                 return Unauthorized(new { message = "Usuario no autenticado" });
@@ -123,7 +123,7 @@ namespace WatchPartyBackend.Controllers
                 return Forbid("Solo el anfitrión puede cambiar de video");
             }
 
-            var nextVideo = _roomManager.PlayNextInQueue(roomId);
+            var nextVideo = _roomManager.AdvanceQueue(roomId);
             if (nextVideo == null)
             {
                 return NotFound(new { message = "No hay videos en la cola" });
@@ -133,11 +133,11 @@ namespace WatchPartyBackend.Controllers
             await _roomManager.BroadcastToRoom(roomId, new WebSocketMessage
             {
                 Type = "video_changed",
-                Data = new 
-                { 
+                Data = new
+                {
                     videoFileName = nextVideo.VideoFileName,
                     title = nextVideo.Title,
-                    queue = _roomManager.GetVideoQueue(roomId)
+                    queue = _roomManager.GetQueue(roomId)
                 }
             });
 
@@ -173,7 +173,7 @@ namespace WatchPartyBackend.Controllers
             await _roomManager.BroadcastToRoom(roomId, new WebSocketMessage
             {
                 Type = "queue_updated",
-                Data = new { queue = _roomManager.GetVideoQueue(roomId) }
+                Data = new { queue = _roomManager.GetQueue(roomId) }
             });
 
             return Ok(new { message = "Cola reordenada" });

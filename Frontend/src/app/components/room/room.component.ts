@@ -46,6 +46,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   videoProvider: VideoProvider = 'file';
   videoId: string | null = null;
   private youtubePlayer: any = null;
+  private youtubePlayerReady: boolean = false;
   private youtubeApiReady: Promise<void> | null = null;
   private youtubeTimePollId: number | null = null;
   private lastAllowedYouTubeTime = 0;
@@ -944,7 +945,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   private applyRemotePlay(currentTime: number): void {
     if (this.isSyncing) return;
 
-    if (this.videoProvider === 'youtube' && this.youtubePlayer) {
+    if (this.videoProvider === 'youtube' && this.youtubePlayer && this.youtubePlayerReady) {
       this.isSyncing = true;
       if (Math.abs(this.youtubePlayer.getCurrentTime() - currentTime) > 0.5) {
         this.youtubePlayer.seekTo(currentTime, true);
@@ -986,7 +987,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   private applyRemotePause(currentTime: number): void {
     if (this.isSyncing) return;
 
-    if (this.videoProvider === 'youtube' && this.youtubePlayer) {
+    if (this.videoProvider === 'youtube' && this.youtubePlayer && this.youtubePlayerReady) {
       this.isSyncing = true;
       if (Math.abs(this.youtubePlayer.getCurrentTime() - currentTime) > 0.5) {
         this.youtubePlayer.seekTo(currentTime, true);
@@ -1026,7 +1027,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
   private applyRemoteSeek(currentTime: number, isPlaying: boolean): void {
     if (this.isSyncing) return;
 
-    if (this.videoProvider === 'youtube' && this.youtubePlayer) {
+    if (this.videoProvider === 'youtube' && this.youtubePlayer && this.youtubePlayerReady) {
       this.isSyncing = true;
       this.youtubePlayer.seekTo(currentTime, true);
       if (isPlaying) {
@@ -1127,6 +1128,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       },
       events: {
         onReady: () => {
+          this.youtubePlayerReady = true;
           this.youtubePlayer.seekTo(startTime, true);
           if (shouldPlay) {
             this.youtubePlayer.playVideo();
@@ -1145,6 +1147,7 @@ export class RoomComponent implements OnInit, OnDestroy, AfterViewInit {
       this.stopYouTubeTimePolling();
       this.youtubePlayer.destroy();
       this.youtubePlayer = null;
+      this.youtubePlayerReady = false;
     }
   }
 
